@@ -1,0 +1,85 @@
+# --------------------
+# Python
+# --------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# UV
+.uv/
+uv.lock
+
+# --------------------
+# Environment / Secrets
+# --------------------
+.env
+.env.*
+.secrets
+*.key
+*.pem
+*.crt
+
+# --------------------
+# AI / Models / Data
+# --------------------
+*.pth
+*.pt
+*.bin
+*.safetensors
+*.h5
+*.onnx
+models/
+
+# Runtime cache
+cache/
+storage/**/cache/
+
+# --------------------
+# Jupyter
+# --------------------
+.ipynb_checkpoints/
+# notebooks/tmp/
+
+# --------------------
+# Logs / Experiments
+# --------------------
+logs/
+*.log
+wandb/
+
+# --------------------
+# Frontend
+# --------------------
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# --------------------
+# IDE / OS
+# --------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --------------------
+# Testing / Coverage
+# --------------------
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --------------------
+# Build Artifacts
+# --------------------
+build/
+dist/
+*.egg-info/
