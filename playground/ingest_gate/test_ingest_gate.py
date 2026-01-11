@@ -1,4 +1,10 @@
 # playground/ingest_gate/test_ingest_gate.py
+"""
+[职责] ingest_gate：验证 ingest pipeline 的端到端最小闭环（PDF -> DB -> Milvus）。
+[边界] 不覆盖 retrieval/generation；不要求 LlamaIndex Index 抽象；只验证 ingest 的可用性、幂等性、字段对齐与可观测性合同。
+[上游关系] 依赖 db.repo(IngestRepo/...)、kb.repo(MilvusRepo)、kb.client/index（Milvus 可用时）、schemas/db contracts 已锁死。
+[下游关系] retrieval/vector 将依赖 Milvus payload 字段；FTS/keyword 将依赖 node 表；generation 将依赖 node_id evidence。
+"""
 
 from __future__ import annotations
 
@@ -13,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uae_law_rag.backend.db.repo import IngestRepo, UserRepo
 
 from uae_law_rag.backend.kb.schema import build_collection_spec, build_expr_for_scope
+from uae_law_rag.backend.schemas.ids import is_uuid_str
 
 
 pytestmark = pytest.mark.ingest_gate
@@ -102,6 +109,28 @@ async def test_ingest_gate_pdf_to_db_and_milvus(session: AsyncSession) -> None:
     assert r1.node_count > 0
     assert r1.vector_count > 0
 
+    # --- Observability contract (ctx/timing/provider_snapshot) ---
+    assert r1.trace_id is not None
+    assert r1.request_id is not None
+    assert is_uuid_str(str(r1.trace_id)) is True
+    assert is_uuid_str(str(r1.request_id)) is True
+
+    assert isinstance(r1.timing_ms, dict)
+    assert "total" in r1.timing_ms
+    # minimal expected stage keys (do not overfit to internal refactor)
+    for k in ("sha256", "parse", "segment", "embed"):
+        assert k in r1.timing_ms
+        assert isinstance(r1.timing_ms[k], float)
+        assert r1.timing_ms[k] >= 0.0
+
+    assert isinstance(r1.provider_snapshot, dict)
+    # parser + embed provider snapshots should exist
+    assert "parser" in r1.provider_snapshot
+    assert "embed" in r1.provider_snapshot
+    assert isinstance(r1.provider_snapshot["parser"], dict)
+    assert isinstance(r1.provider_snapshot["embed"], dict)
+    assert r1.provider_snapshot["parser"].get("name") == "pymupdf4llm"
+
     # DB checks
     f = await ingest_repo.get_file(r1.file_id)
     assert f is not None
@@ -123,10 +152,12 @@ async def test_ingest_gate_pdf_to_db_and_milvus(session: AsyncSession) -> None:
 
     # Milvus smoke search (optional but recommended for stability if pipeline returns a sample vector)
     expr = build_expr_for_scope(kb_id=kb.id)
-    if getattr(r1, "sample_query_vector", None) is not None:
+    qv = getattr(r1, "sample_query_vector", None)
+    if qv is not None:
+        # type-narrowing: qv is List[float] here, safe to wrap into List[List[float]]
         res = await milvus_repo.search(
             collection=kb.milvus_collection,
-            query_vectors=[r1.sample_query_vector],
+            query_vectors=[qv],
             top_k=3,
             expr=expr,
             output_fields=spec.search.output_fields,
@@ -153,6 +184,16 @@ async def test_ingest_gate_pdf_to_db_and_milvus(session: AsyncSession) -> None:
     assert r2.document_id == r1.document_id
     assert r2.node_count == 0
     assert r2.vector_count == 0
+
+    # idempotent path should still return observability fields
+    assert r2.trace_id is not None
+    assert r2.request_id is not None
+    assert is_uuid_str(str(r2.trace_id)) is True
+    assert is_uuid_str(str(r2.request_id)) is True
+    assert isinstance(r2.timing_ms, dict)
+    assert "total" in r2.timing_ms
+    # provider snapshot may exist (ctx auto-created), but at minimum must be dict
+    assert isinstance(r2.provider_snapshot, dict)
 
     await idx.release_collection(spec.name)
     await client.drop_collection(spec.name)

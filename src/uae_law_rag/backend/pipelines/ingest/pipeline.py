@@ -14,13 +14,13 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, List, Optional, Sequence
+from typing import Any, List, Optional, Sequence, Dict
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from uae_law_rag.backend.db.repo.ingest_repo import IngestRepo
 from uae_law_rag.backend.db.models.doc import DocumentModel
+from uae_law_rag.backend.pipelines.base.context import PipelineContext
 
 # MilvusRepo 只在运行时注入，避免在无 Milvus 环境下 import 失败导致 gate 之外的测试崩溃
 # from uae_law_rag.backend.kb.repo import MilvusRepo
@@ -43,6 +43,10 @@ class IngestResult:
     sha256: str
     pages: Optional[int] = None
     sample_query_vector: Optional[List[float]] = None  # docstring: 供 gate 做 Milvus smoke search（可选）
+    trace_id: Optional[str] = None  # docstring: pipeline 链路追踪ID（可回放/可观测）
+    request_id: Optional[str] = None  # docstring: 上游请求ID（可回放/可观测）
+    timing_ms: Dict[str, float] = None  # type: ignore[assignment]  # docstring: 各阶段耗时（ms），可直接落库
+    provider_snapshot: Dict[str, Any] = None  # type: ignore[assignment]  # docstring: provider 快照（embed/parser等）
 
 
 # -----------------------------
@@ -62,6 +66,7 @@ async def run_ingest_pdf(
     segment_version: str = "v1",
     milvus_repo: Any,  # expected: kb.repo.MilvusRepo
     milvus_collection: str,
+    ctx: Optional[PipelineContext] = None,
 ) -> IngestResult:
     """
     [职责] run_ingest_pdf：导入单个 PDF 的主编排入口（幂等、落库、Milvus upsert）。
@@ -69,6 +74,8 @@ async def run_ingest_pdf(
     [上游关系] ingest_gate / services 调用；上游提供 kb_id 与 MilvusRepo/collection。
     [下游关系] 写入 knowledge_file/document/node/node_vector_map；写入 Milvus 向量实体；返回 IngestResult。
     """
+    ctx = ctx or PipelineContext.from_session(session)
+
     # --- normalize inputs ---
     pdf_file = Path(pdf_path).expanduser().resolve()
     if not pdf_file.exists():
@@ -79,16 +86,19 @@ async def run_ingest_pdf(
     file_ext = _safe_ext(pdf_file.name)
 
     # --- deps ---
-    ingest_repo = IngestRepo(session)
+    ingest_repo = ctx.ingest_repo
 
     # --- compute sha256 (idempotency key) ---
-    sha256 = _sha256_file(pdf_file)
+    with ctx.timing.stage("sha256"):
+        sha256 = _sha256_file(pdf_file)
 
     # --- idempotent check: same KB + sha256 => treat as same file in MVP ---
-    existing = await ingest_repo.get_file_by_sha256(kb_id=kb_id, sha256=sha256)
+    with ctx.timing.stage("idempotency_check"):
+        existing = await ingest_repo.get_file_by_sha256(kb_id=kb_id, sha256=sha256)
     if existing is not None:
         # For idempotent return, we still need document_id. Prefer the first document for this file.
-        document_id = await _get_document_id_by_file_id(session=session, file_id=existing.id)
+        with ctx.timing.stage("idempotency_lookup_document"):
+            document_id = await _get_document_id_by_file_id(session=session, file_id=existing.id)
 
         # Mark as success is optional; we keep DB unchanged by default in idempotent path.
         return IngestResult(
@@ -100,67 +110,88 @@ async def run_ingest_pdf(
             sha256=sha256,
             pages=existing.pages,
             sample_query_vector=None,
+            trace_id=str(ctx.trace_id),
+            request_id=str(ctx.request_id),
+            timing_ms=ctx.timing_ms(),
+            provider_snapshot=dict(ctx.provider_snapshot),
         )
 
     # --- load KB config (embed_dim/model/provider, chunking_config...) ---
-    kb = await ingest_repo.get_kb(kb_id)
+    with ctx.timing.stage("load_kb"):
+        kb = await ingest_repo.get_kb(kb_id)
     if kb is None:
         raise ValueError(f"KB not found: {kb_id}")
 
     # --- Step 1: create file row (pending) ---
-    f = await ingest_repo.create_file(
-        kb_id=kb_id,
-        file_name=_file_name,
-        file_ext=file_ext,
-        sha256=sha256,
-        source_uri=_source_uri,
-        file_version=1,
-        file_mtime=_safe_mtime(pdf_file),
-        file_size=_safe_size(pdf_file),
-        pages=None,  # will fill if parser returns pages
-        ingest_profile={
-            "parser": parser_name,
-            "parse_version": parse_version,
-            "segment_version": segment_version,
-        },
-    )
+    with ctx.timing.stage("persist_db_file"):
+        f = await ingest_repo.create_file(
+            kb_id=kb_id,
+            file_name=_file_name,
+            file_ext=file_ext,
+            sha256=sha256,
+            source_uri=_source_uri,
+            file_version=1,
+            file_mtime=_safe_mtime(pdf_file),
+            file_size=_safe_size(pdf_file),
+            pages=None,  # will fill if parser returns pages
+            ingest_profile={
+                "parser": parser_name,
+                "parse_version": parse_version,
+                "segment_version": segment_version,
+            },
+        )
 
     # --- Step 2: parse pdf -> raw units (pages/blocks) ---
-    parsed = await _call_pdf_parse(
-        pdf_path=str(pdf_file),
-        parser_name=parser_name,
-        parse_version=parse_version,
-    )
+    ctx.with_provider("parser", {"name": parser_name, "parse_version": parse_version})
+    with ctx.timing.stage("parse"):
+        parsed = await _call_pdf_parse(
+            pdf_path=str(pdf_file),
+            parser_name=parser_name,
+            parse_version=parse_version,
+        )
     pages = _infer_pages(parsed)
     if pages is not None:
         f.pages = pages  # docstring: 回填页数快照（可选）
 
     # --- Step 3: segment -> node drafts (list[dict]) ---
-    node_dicts = await _call_segment(
-        parsed=parsed,
-        chunking_config=getattr(kb, "chunking_config", {}) or {},
-        segment_version=segment_version,
-    )
+    ctx.meta["segment_version"] = segment_version
+    with ctx.timing.stage("segment"):
+        node_dicts = await _call_segment(
+            parsed=parsed,
+            chunking_config=getattr(kb, "chunking_config", {}) or {},
+            segment_version=segment_version,
+        )
 
     # --- Step 4: persist_db (document + nodes) ---
     # title/source_name 可在 parsed 中提取；MVP 先用文件名
-    doc = await ingest_repo.create_document(
-        kb_id=kb_id,
-        file_id=f.id,
-        title=_file_name,
-        source_name=_file_name,
-        meta_data={"parser": parser_name, "parse_version": parse_version},
-    )
-    nodes = await ingest_repo.bulk_create_nodes(document_id=doc.id, nodes=node_dicts)
+    with ctx.timing.stage("persist_db_document"):
+        doc = await ingest_repo.create_document(
+            kb_id=kb_id,
+            file_id=f.id,
+            title=_file_name,
+            source_name=_file_name,
+            meta_data={"parser": parser_name, "parse_version": parse_version},
+        )
+    with ctx.timing.stage("persist_db_nodes"):
+        nodes = await ingest_repo.bulk_create_nodes(document_id=doc.id, nodes=node_dicts)
 
     # --- Step 5: embed nodes (list[list[float]]) ---
     texts: List[str] = [n.text for n in nodes]
-    embeddings = await _call_embed(
-        texts=texts,
-        embed_provider=getattr(kb, "embed_provider", "ollama"),
-        embed_model=getattr(kb, "embed_model", ""),
-        embed_dim=getattr(kb, "embed_dim", None),
+    ctx.with_provider(
+        "embed",
+        {
+            "provider": getattr(kb, "embed_provider", "ollama"),
+            "model": getattr(kb, "embed_model", ""),
+            "dim": getattr(kb, "embed_dim", None),
+        },
     )
+    with ctx.timing.stage("embed"):
+        embeddings = await _call_embed(
+            texts=texts,
+            embed_provider=getattr(kb, "embed_provider", "ollama"),
+            embed_model=getattr(kb, "embed_model", ""),
+            embed_dim=getattr(kb, "embed_dim", None),
+        )
 
     if len(embeddings) != len(nodes):
         raise ValueError(f"embedding count mismatch: {len(embeddings)} != {len(nodes)}")
@@ -187,23 +218,26 @@ async def run_ingest_pdf(
         )
 
     # upsert into Milvus
-    await _call_persist_milvus(
-        milvus_repo=milvus_repo,
-        collection=milvus_collection,
-        entities=entities,
-    )
+    with ctx.timing.stage("persist_milvus"):
+        await _call_persist_milvus(
+            milvus_repo=milvus_repo,
+            collection=milvus_collection,
+            entities=entities,
+        )
 
     # persist node_vector_map in SQL
     maps = [{"node_id": nodes[i].id, "vector_id": vector_ids[i]} for i in range(len(nodes))]
-    await ingest_repo.bulk_create_node_vector_maps(kb_id=kb_id, file_id=f.id, maps=maps)
+    with ctx.timing.stage("persist_db_node_vector_maps"):
+        await ingest_repo.bulk_create_node_vector_maps(kb_id=kb_id, file_id=f.id, maps=maps)
 
     # --- Step 7: mark file ingested ---
-    await ingest_repo.mark_file_ingested(
-        f.id,
-        status="success",
-        node_count=len(nodes),
-        last_ingested_at=datetime.now(timezone.utc),
-    )
+    with ctx.timing.stage("persist_db_file_mark_ingested"):
+        await ingest_repo.mark_file_ingested(
+            f.id,
+            status="success",
+            node_count=len(nodes),
+            last_ingested_at=datetime.now(timezone.utc),
+        )
 
     # Note: session commit is controlled by caller fixture/service; we only flush in repo methods.
 
@@ -217,6 +251,10 @@ async def run_ingest_pdf(
         sha256=sha256,
         pages=pages,
         sample_query_vector=sample_vec,
+        trace_id=str(ctx.trace_id),
+        request_id=str(ctx.request_id),
+        timing_ms=ctx.timing_ms(),
+        provider_snapshot=dict(ctx.provider_snapshot),
     )
 
 
