@@ -122,7 +122,6 @@ class RetrievalRecordModel(Base):
     # --- explicit ownership relationships (消费 Conversation/Message/KB) ---
     kb: Mapped["KnowledgeBaseModel"] = relationship(
         "KnowledgeBaseModel",
-        comment=None,  # 同上
     )
 
     hits: Mapped[List["RetrievalHitModel"]] = relationship(

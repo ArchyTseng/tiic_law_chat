@@ -37,6 +37,8 @@ backend = [
     "psycopg2-binary>=2.9.11",
     "redis>=5.0.0",
     "websockets>=12.0",
+    "aiosqlite>=0.22.1",
+    "greenlet>=3.3.0",
 ]
 
 llamaindex-basic = [
@@ -113,6 +115,10 @@ ignore = ["E402", "E501", "W291", "W292", "W293", "E203", "D"]
 line-length = 120
 exclude = ["*.toml"]
 
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
@@ -125,6 +131,7 @@ packages = ["src/uae_law_rag"]
 [tool.pytest.ini_options]
 testpaths = ["playground"]
 addopts = "-q --strict-markers"
+asyncio_mode = "auto"
 markers = [
   "ingest_gate: ingest gate tests",
   "retrieval_gate: retrieval gate tests",

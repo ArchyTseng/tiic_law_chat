@@ -24,7 +24,6 @@ from ..base import Base
 
 if TYPE_CHECKING:
     from .user import UserModel
-    from .retrieval import RetrievalRecordModel
 
 
 class KnowledgeBaseModel(Base):
@@ -152,12 +151,6 @@ class KnowledgeBaseModel(Base):
         "DocumentModel",
         back_populates="kb",
         cascade="all, delete-orphan",
-    )
-
-    retrieval_records: Mapped[List["RetrievalRecordModel"]] = relationship(
-        "RetrievalRecordModel",
-        cascade="all, delete-orphan",
-        order_by="RetrievalRecordModel.created_at",
     )
 
 

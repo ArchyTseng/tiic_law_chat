@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from .user import UserModel
     from .message import MessageModel
     from .doc import KnowledgeBaseModel
-    from .retrieval import RetrievalRecordModel
 
 
 class ConversationModel(Base):
@@ -88,12 +87,6 @@ class ConversationModel(Base):
         back_populates="conversation",
         cascade="all, delete-orphan",
         order_by="MessageModel.created_at",
-    )
-
-    retrieval_records: Mapped[List["RetrievalRecordModel"]] = relationship(
-        "RetrievalRecordModel",
-        cascade="all, delete-orphan",
-        order_by="RetrievalRecordModel.created_at",
     )
 
     default_kb: Mapped[Optional["KnowledgeBaseModel"]] = relationship(
