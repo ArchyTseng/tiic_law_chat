@@ -3,20 +3,19 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 from typing import List, Optional, TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, String, func
+from sqlalchemy import Boolean, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from ..base import Base
+from ..base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from .conversation import ConversationModel
     from .doc import KnowledgeBaseModel
 
 
-class UserModel(Base):
+class UserModel(Base, TimestampMixin):
     """
     [职责] 用户实体：系统身份与归属边界（会话、知识库归属到用户）。
     [边界] 不承担鉴权流程与密码校验逻辑；仅持久化最小用户信息。
@@ -52,13 +51,6 @@ class UserModel(Base):
         default=True,
         nullable=False,
         comment="用户是否启用",  # docstring: 便于禁用账户而不删除数据
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        server_default=func.now(),
-        nullable=False,
-        comment="创建时间",  # docstring: 用户创建时间戳
     )
 
     conversations: Mapped[List["ConversationModel"]] = relationship(

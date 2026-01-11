@@ -3,21 +3,21 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 from typing import List, Optional, TYPE_CHECKING
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, func
+from sqlalchemy import JSON, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from ..base import Base
+from ..base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from .user import UserModel
     from .message import MessageModel
     from .doc import KnowledgeBaseModel
+    from .evaluator import EvaluationRecordModel
 
 
-class ConversationModel(Base):
+class ConversationModel(Base, TimestampMixin):
     """
     [职责] 会话实体：承载一次持续对话的上下文边界（消息序列、默认KB配置、会话级策略）。
     [边界] 不存储检索/生成明细（这些进入 RetrievalRecord/GenerationRecord）；仅存对话容器信息。
@@ -70,13 +70,6 @@ class ConversationModel(Base):
         comment="会话级策略快照（history_len/rerank等）",  # docstring: 会话默认参数，可回放
     )
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        server_default=func.now(),
-        nullable=False,
-        comment="创建时间",  # docstring: 会话创建时间戳
-    )
-
     user: Mapped["UserModel"] = relationship(
         "UserModel",
         back_populates="conversations",
@@ -92,6 +85,12 @@ class ConversationModel(Base):
     default_kb: Mapped[Optional["KnowledgeBaseModel"]] = relationship(
         "KnowledgeBaseModel",
     )
+
+    evaluation_records: Mapped[list["EvaluationRecordModel"]] = relationship(
+        "EvaluationRecordModel",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+    )  # docstring: 会话的评估记录集合
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<ConversationModel id={self.id} user_id={self.user_id} chat_type={self.chat_type!r}>"

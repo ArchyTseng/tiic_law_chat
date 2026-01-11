@@ -16,11 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uae_law_rag.backend.db.base import Base
 from uae_law_rag.backend.db.repo import (
     ConversationRepo,
-    GenerationRepo,
-    IngestRepo,
     MessageRepo,
-    RetrievalRepo,
     UserRepo,
+    IngestRepo,
+    RetrievalRepo,
+    GenerationRepo,
+    EvaluatorRepo,
 )
 
 
@@ -57,6 +58,7 @@ async def test_sql_gate_repo_happy_path(session: AsyncSession) -> None:
     ingest_repo = IngestRepo(session)
     retrieval_repo = RetrievalRepo(session)
     gen_repo = GenerationRepo(session)
+    eval_repo = EvaluatorRepo(session)
 
     # 1) user
     u = await user_repo.create(username="u1", password_hash=None, is_active=True)
@@ -226,6 +228,28 @@ async def test_sql_gate_repo_happy_path(session: AsyncSession) -> None:
     assert m2 is not None
     assert m2.status == "success"
     assert m2.response == "Answer ..."
+
+    # 9) evaluator record
+    ev = await eval_repo.create(
+        conversation_id=c.id,
+        message_id=m.id,
+        retrieval_record_id=rec.id,
+        generation_record_id=gen.id,
+        status="pass",
+        rule_version="v0",
+        config={"require_citations": True},
+        checks={"items": [{"name": "require_citations", "status": "pass"}]},
+        scores={"overall": {"min_answer_chars": 1.0}},
+        meta={"trace_id": "t"},
+    )
+    assert ev.id
+    assert ev.message_id == m.id
+    assert ev.retrieval_record_id == rec.id
+    assert ev.generation_record_id == gen.id
+
+    ev2 = await eval_repo.get_by_message_id(m.id)
+    assert ev2 is not None
+    assert ev2.id == ev.id
 
 
 @pytest.mark.asyncio

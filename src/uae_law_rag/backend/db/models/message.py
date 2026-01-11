@@ -3,21 +3,21 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 from typing import Optional, TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func, JSON
+from sqlalchemy import ForeignKey, Integer, String, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from ..base import Base
+from ..base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from .conversation import ConversationModel
     from .retrieval import RetrievalRecordModel
     from .generation import GenerationRecordModel
+    from .evaluator import EvaluationRecordModel
 
 
-class MessageModel(Base):
+class MessageModel(Base, TimestampMixin):
     """
     [职责] 消息实体：一次用户提问与系统回答的持久化单元（含反馈与链路指针）。
     [边界] 不承载检索/生成明细内容；通过 retrieval_record_id / generation_record_id 指向可回放记录。
@@ -104,13 +104,6 @@ class MessageModel(Base):
         comment="用户评分理由",  # docstring: 反馈文本
     )
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        server_default=func.now(),
-        nullable=False,
-        comment="创建时间",  # docstring: 消息写入时间戳
-    )
-
     conversation: Mapped["ConversationModel"] = relationship(
         "ConversationModel",
         back_populates="messages",
@@ -127,6 +120,13 @@ class MessageModel(Base):
         back_populates="message",
         uselist=False,
     )
+
+    evaluation_record: Mapped[Optional["EvaluationRecordModel"]] = relationship(
+        "EvaluationRecordModel",
+        back_populates="message",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )  # docstring: 本条消息的评估记录（一对一）
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<MessageModel id={self.id} conversation_id={self.conversation_id} status={self.status!r}>"

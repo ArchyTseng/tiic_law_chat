@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 from typing import List, Optional, TYPE_CHECKING
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, Text, func, UniqueConstraint
+from sqlalchemy import Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from ..base import Base
+from ..base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from .message import MessageModel
     from .doc import KnowledgeBaseModel, NodeModel
+    from .evaluator import EvaluationRecordModel
 
 
-class RetrievalRecordModel(Base):
+class RetrievalRecordModel(Base, TimestampMixin):
     """
     [职责] 检索记录：一次“关键词全量召回 + 向量检索 + 融合 + rerank”的可回放审计单元。
     [边界] 不存生成结果；生成进入 GenerationRecord。此表只记录 retrieval pipeline 的输入、参数与产物索引。
@@ -112,13 +112,6 @@ class RetrievalRecordModel(Base):
         comment="各阶段耗时（ms）：keyword/vector/fusion/rerank",  # docstring: 性能分析与 gate tests
     )
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        server_default=func.now(),
-        nullable=False,
-        comment="创建时间",  # docstring: 检索记录创建时间戳
-    )
-
     # --- explicit ownership relationships (消费 Conversation/Message/KB) ---
     kb: Mapped["KnowledgeBaseModel"] = relationship(
         "KnowledgeBaseModel",
@@ -136,8 +129,15 @@ class RetrievalRecordModel(Base):
         back_populates="retrieval_record",
     )
 
+    evaluation_record: Mapped[Optional["EvaluationRecordModel"]] = relationship(
+        "EvaluationRecordModel",
+        back_populates="retrieval_record",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )  # docstring: 本次检索的评估记录（一对一）
 
-class RetrievalHitModel(Base):
+
+class RetrievalHitModel(Base, TimestampMixin):
     """
     [职责] 检索命中：记录每个证据节点在不同阶段（keyword/vector/fusion/rerank）的排名与分数细节。
     [边界] 不做引用格式化；引用渲染在 generation/postprocess 或 API 层完成。
@@ -219,13 +219,6 @@ class RetrievalHitModel(Base):
         Integer,
         nullable=True,
         comment="结束偏移快照（可选，冗余自 Node）",  # docstring: 证据定位辅助
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        server_default=func.now(),
-        nullable=False,
-        comment="创建时间",  # docstring: 命中记录创建时间戳
     )
 
     record: Mapped["RetrievalRecordModel"] = relationship(

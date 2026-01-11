@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 from typing import Optional, TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, JSON, String, Text, func, UniqueConstraint
+from sqlalchemy import ForeignKey, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from ..base import Base
+from ..base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from .message import MessageModel
     from .retrieval import RetrievalRecordModel
+    from .evaluator import EvaluationRecordModel
 
 
-class GenerationRecordModel(Base):
+class GenerationRecordModel(Base, TimestampMixin):
     """
     [职责] 生成记录：一次 LLM 生成（prompt + messages + evidence）的可回放审计单元。
     [边界] 不做评估打分；评估进入 evaluator 体系或单独表（后续可扩展）。
@@ -114,13 +114,6 @@ class GenerationRecordModel(Base):
         comment="失败原因（可选）",  # docstring: 生成失败时记录原因
     )
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        server_default=func.now(),
-        nullable=False,
-        comment="创建时间",  # docstring: 生成记录创建时间戳
-    )
-
     retrieval_record: Mapped["RetrievalRecordModel"] = relationship(
         "RetrievalRecordModel",
     )
@@ -130,3 +123,9 @@ class GenerationRecordModel(Base):
         back_populates="generation_record",
         uselist=False,
     )
+
+    evaluation_record: Mapped[Optional["EvaluationRecordModel"]] = relationship(
+        "EvaluationRecordModel",
+        back_populates="generation_record",
+        uselist=False,
+    )  # docstring: 本次生成的评估记录（可选一对一）

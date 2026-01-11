@@ -16,17 +16,16 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from ..base import Base
+from ..base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from .user import UserModel
 
 
-class KnowledgeBaseModel(Base):
+class KnowledgeBaseModel(Base, TimestampMixin):
     """
     [职责] 知识库实体：定义检索作用域与向量库（Milvus）绑定及 embedding/rerank 配置快照。
     [边界] 不直接存储向量；向量存 Milvus。DB 仅存“collection/index/profile/统计”等可回放信息。
@@ -129,13 +128,6 @@ class KnowledgeBaseModel(Base):
         comment="KB 内文件数量（冗余统计）",  # docstring: UI/统计用，可由 query 重算
     )
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        server_default=func.now(),
-        nullable=False,
-        comment="创建时间",  # docstring: KB 创建时间戳
-    )
-
     user: Mapped["UserModel"] = relationship(
         "UserModel",
         back_populates="knowledge_bases",
@@ -154,7 +146,7 @@ class KnowledgeBaseModel(Base):
     )
 
 
-class KnowledgeFileModel(Base):
+class KnowledgeFileModel(Base, TimestampMixin):
     """
     [职责] 知识文件实体：记录源文件版本、指纹、解析/导入状态与统计。
     [边界] 不存储解析后的节点文本（在 NodeModel）；不存储向量（在 Milvus）。
@@ -259,13 +251,6 @@ class KnowledgeFileModel(Base):
         comment="最近一次导入完成时间",  # docstring: 便于增量/重试策略
     )
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        server_default=func.now(),
-        nullable=False,
-        comment="创建时间",  # docstring: 文件记录创建时间戳
-    )
-
     kb: Mapped["KnowledgeBaseModel"] = relationship(
         "KnowledgeBaseModel",
         back_populates="files",
@@ -278,7 +263,7 @@ class KnowledgeFileModel(Base):
     )
 
 
-class DocumentModel(Base):
+class DocumentModel(Base, TimestampMixin):
     """
     [职责] 逻辑文档实体：承载“一个可检索的文档单元”（通常对应一个 PDF 文件的解析结果）。
     [边界] 不存储向量；不做检索记录；仅作为 Node 的父容器与元信息载体。
@@ -331,13 +316,6 @@ class DocumentModel(Base):
         comment="文档元数据（解析信息/法条结构摘要等）",  # docstring: 非关键字段的扩展区
     )
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        server_default=func.now(),
-        nullable=False,
-        comment="创建时间",  # docstring: 文档入库时间戳
-    )
-
     kb: Mapped["KnowledgeBaseModel"] = relationship(
         "KnowledgeBaseModel",
         back_populates="documents",
@@ -355,7 +333,7 @@ class DocumentModel(Base):
     )
 
 
-class NodeModel(Base):
+class NodeModel(Base, TimestampMixin):
     """
     [职责] 节点（Chunk）实体：关键词全量召回与证据引用的最小单元（包含 page/offset 等定位信息）。
     [边界] 不存向量本体；向量在 Milvus。Node 仅存文本与结构化定位元信息。
@@ -432,13 +410,6 @@ class NodeModel(Base):
         comment="节点元数据（解析细节/置信度/标题等）",  # docstring: 扩展字段
     )
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        server_default=func.now(),
-        nullable=False,
-        comment="创建时间",  # docstring: 节点写入时间戳
-    )
-
     document: Mapped["DocumentModel"] = relationship(
         "DocumentModel",
         back_populates="nodes",
@@ -451,7 +422,7 @@ class NodeModel(Base):
     )
 
 
-class NodeVectorMapModel(Base):
+class NodeVectorMapModel(Base, TimestampMixin):
     """
     [职责] Node↔Milvus 映射：维护 node_id 与向量主键/collection 的对应关系，保证 upsert/回查一致。
     [边界] 不存 embedding；只存映射与必要元信息（可用于排错与一致性校验）。
@@ -512,13 +483,6 @@ class NodeVectorMapModel(Base):
         default=dict,
         nullable=False,
         comment="映射元数据（collection/partition等冗余信息）",  # docstring: 排错与一致性校验
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        server_default=func.now(),
-        nullable=False,
-        comment="创建时间",  # docstring: 映射创建时间戳
     )
 
     node: Mapped["NodeModel"] = relationship(

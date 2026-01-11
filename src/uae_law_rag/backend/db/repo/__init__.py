@@ -15,6 +15,7 @@ from .message_repo import MessageRepo
 from .ingest_repo import IngestRepo
 from .retrieval_repo import RetrievalRepo
 from .generation_repo import GenerationRepo
+from .evaluator_repo import EvaluatorRepo
 
 __all__ = [
     "UserRepo",
@@ -23,4 +24,5 @@ __all__ = [
     "IngestRepo",
     "RetrievalRepo",
     "GenerationRepo",
+    "EvaluatorRepo",
 ]

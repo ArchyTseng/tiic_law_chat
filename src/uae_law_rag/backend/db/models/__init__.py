@@ -16,6 +16,7 @@ from .message import MessageModel
 from .doc import KnowledgeBaseModel, KnowledgeFileModel, DocumentModel, NodeModel, NodeVectorMapModel
 from .retrieval import RetrievalRecordModel, RetrievalHitModel
 from .generation import GenerationRecordModel
+from .evaluator import EvaluationRecordModel
 
 __all__ = [
     # base
@@ -34,4 +35,6 @@ __all__ = [
     "RetrievalRecordModel",
     "RetrievalHitModel",
     "GenerationRecordModel",
+    # evaluator
+    "EvaluationRecordModel",
 ]
