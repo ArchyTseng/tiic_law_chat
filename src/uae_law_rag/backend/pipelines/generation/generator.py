@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from inspect import Parameter
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 
@@ -85,6 +86,10 @@ def _filter_kwargs(fn: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         sig = inspect.signature(fn)  # docstring: 读取可用参数
     except (TypeError, ValueError):
         return {}  # docstring: 无签名时回退为空
+    # docstring: 若函数支持 **kwargs，则允许透传全部配置（避免静默丢参）
+    for p in sig.parameters.values():
+        if p.kind == Parameter.VAR_KEYWORD:
+            return dict(kwargs)
     return {k: v for k, v in kwargs.items() if k in sig.parameters}  # docstring: 保留受支持参数
 
 
@@ -117,14 +122,27 @@ def _build_mock_response(messages_snapshot: Mapping[str, Any]) -> str:
     """
     evidence = messages_snapshot.get("evidence") or []  # docstring: evidence 快照
     citations: List[Dict[str, Any]] = []  # docstring: citations 列表
+
+    def _coerce_int(value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str) and value.strip().isdigit():
+            return int(value.strip())
+        return None
+
     for item in evidence[:2]:
         node_id = str(item.get("node_id") or "").strip()
         if not node_id:
             continue
+        coerced_rank = _coerce_int(item.get("rank"))
         citations.append(
             {
                 "node_id": node_id,
-                "rank": int(item.get("rank") or len(citations) + 1),
+                "rank": int(coerced_rank) if coerced_rank is not None else (len(citations) + 1),
                 "quote": str(item.get("excerpt") or "")[:200],
             }
         )  # docstring: 基于证据生成引用
