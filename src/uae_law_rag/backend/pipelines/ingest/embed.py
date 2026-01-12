@@ -103,6 +103,15 @@ def _build_hash_embedder(*, dim: int, model: str, provider: str) -> Any:
         def _get_query_embedding(self, query: str) -> List[float]:
             return self._hash_to_vec(query)  # docstring: 查询向量
 
+        async def aget_text_embedding(self, text: str) -> List[float]:
+            return self._hash_to_vec(text)
+
+        async def aget_query_embedding(self, query: str) -> List[float]:
+            return self._hash_to_vec(query)
+
+        async def aget_text_embedding_batch(self, texts: List[str]) -> List[List[float]]:
+            return [self._hash_to_vec(t) for t in texts]
+
     return _HashEmbedding(dim=dim, model_name=model, provider_name=provider)
 
 
@@ -233,6 +242,9 @@ async def _embed_text_nodes(embedder: Any, nodes: Sequence[Any]) -> Tuple[List[L
     else:
         raise AttributeError("BaseEmbedding missing embedding methods")  # docstring: 强约束
 
+    if len(vectors) != len(texts):
+        raise ValueError(f"embedding count mismatch: {len(vectors)} != {len(texts)}")
+
     vecs = [list(map(float, v)) for v in vectors]  # docstring: 确保向量为 float list
     scored_nodes: List[Any] = []
     for node, vec in zip(nodes, vecs):
@@ -258,18 +270,38 @@ async def embed_texts(
     if not texts:
         return []  # docstring: 空输入直接返回
 
+    # NOTE: 必须保持输出长度与输入长度一致；空白文本用确定性零向量占位
+    texts_norm: List[str] = [str(t) if t is not None else "" for t in texts]
+    non_empty_idx: List[int] = [i for i, t in enumerate(texts_norm) if t.strip()]
+
     embedder = _resolve_embedder(
         provider=provider, model=model, dim=dim, embed_config=embed_config
     )  # docstring: 构造 embedding
-    nodes = _build_text_nodes(texts=texts)  # docstring: 构造 TextNode 列表
-    vectors, _ = await _embed_text_nodes(embedder, nodes)  # docstring: 生成向量并绑定到节点
+    if not non_empty_idx:
+        if dim is None:
+            raise ValueError("all texts are empty; dim is required to build placeholder embeddings")
+        zero = [0.0] * int(dim)
+        return [list(zero) for _ in texts_norm]
+
+    texts_non_empty = [texts_norm[i] for i in non_empty_idx]
+    nodes = _build_text_nodes(texts=texts_non_empty)  # docstring: 仅对非空文本做 embedding
+    vectors_non_empty, _ = await _embed_text_nodes(embedder, nodes)  # docstring: 生成向量
+
+    out_dim = int(dim) if dim is not None else len(vectors_non_empty[0])
+    zero = [0.0] * out_dim
+    out: List[List[float]] = [list(zero) for _ in texts_norm]
+    for i, vec in zip(non_empty_idx, vectors_non_empty):
+        v = list(map(float, vec))
+        if len(v) != out_dim:
+            raise ValueError(f"embedding dim mismatch: {len(v)} != {out_dim}")
+        out[i] = v
 
     if dim is not None:
-        for vec in vectors:
+        for vec in out:
             if len(vec) != int(dim):
                 raise ValueError(f"embedding dim mismatch: {len(vec)} != {dim}")  # docstring: 维度一致性校验
 
-    return vectors
+    return out
 
 
 async def embed_nodes(
@@ -289,14 +321,35 @@ async def embed_nodes(
     if not nodes:
         return []  # docstring: 空输入直接返回
 
-    texts = [str(n.get("text") or "") for n in nodes]  # docstring: 提取节点文本
+    provider_key = str(provider).strip().lower()
+    model_name = str(model).strip()
+
+    texts_norm: List[str] = [str(n.get("text") or "") for n in nodes]  # docstring: 提取节点文本
+    non_empty_idx: List[int] = [i for i, t in enumerate(texts_norm) if t.strip()]
     metadatas = [dict(n.get("meta_data") or {}) for n in nodes]  # docstring: 透传 metadata
 
     embedder = _resolve_embedder(
         provider=provider, model=model, dim=dim, embed_config=embed_config
     )  # docstring: 构造 embedding
-    text_nodes = _build_text_nodes(texts=texts, metadatas=metadatas)  # docstring: 构造 TextNode 列表
-    vectors, _ = await _embed_text_nodes(embedder, text_nodes)  # docstring: 生成向量并绑定到节点
+    if not non_empty_idx:
+        if dim is None:
+            raise ValueError("all node texts are empty; dim is required to build placeholder embeddings")
+        vectors = [[0.0] * int(dim) for _ in nodes]
+    else:
+        texts_non_empty = [texts_norm[i] for i in non_empty_idx]
+        metas_non_empty = [metadatas[i] for i in non_empty_idx]
+        text_nodes = _build_text_nodes(
+            texts=texts_non_empty, metadatas=metas_non_empty
+        )  # docstring: 构造 TextNode 列表
+        vectors_non_empty, _ = await _embed_text_nodes(embedder, text_nodes)  # docstring: 生成向量
+        out_dim = int(dim) if dim is not None else len(vectors_non_empty[0])
+        zero = [0.0] * out_dim
+        vectors = [list(zero) for _ in nodes]
+        for i, vec in zip(non_empty_idx, vectors_non_empty):
+            v = list(map(float, vec))
+            if len(v) != out_dim:
+                raise ValueError(f"embedding dim mismatch: {len(v)} != {out_dim}")
+            vectors[i] = v
 
     results: List[EmbeddingResult] = []
     for node, vec in zip(nodes, vectors):
@@ -308,8 +361,8 @@ async def embed_nodes(
                 node_id=node_id,
                 vector=vec,
                 dim=len(vec),
-                model=model,
-                provider=provider,
+                model=model_name,
+                provider=provider_key,
             )
         )
 
