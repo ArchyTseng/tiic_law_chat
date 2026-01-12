@@ -40,7 +40,7 @@ _STAGE_TO_SOURCE: Dict[str, HitSource] = {
     "vector": "vector",
     "fusion": "fused",
     "rerank": "reranked",
-}  # docstring: Candidate.stage → RetrievalHit.source
+}  # docstring: Candidate.stage -> RetrievalHit.source
 
 
 @dataclass(frozen=True)
@@ -165,12 +165,12 @@ def _build_provider_snapshot(
 
 def _candidate_to_schema_hit(candidate: Candidate, *, retrieval_record_id: str, rank: int) -> RetrievalHit:
     """
-    [职责] Candidate → RetrievalHit schema 映射（用于 bundle 返回）。
+    [职责] Candidate -> RetrievalHit schema 映射（用于 bundle 返回）。
     [边界] 不读取 DB；仅使用 Candidate 快照字段。
     [上游关系] run_retrieval_pipeline 调用。
     [下游关系] RetrievalBundle.hits。
     """
-    source = _STAGE_TO_SOURCE.get(candidate.stage, "fused")  # docstring: stage→source 映射
+    source = _STAGE_TO_SOURCE.get(candidate.stage, "fused")  # docstring: stage->source 映射
     return RetrievalHit(
         retrieval_record_id=cast(RetrievalRecordId, UUIDStr(str(retrieval_record_id))),  # docstring: 归属检索记录
         node_id=cast(NodeId, UUIDStr(str(candidate.node_id))),  # docstring: 证据节点ID
@@ -213,6 +213,17 @@ async def run_retrieval_pipeline(
     [上游关系] services/chat_service 或脚本调用；上游准备 query_text/query_vector。
     [下游关系] generation pipeline 使用 RetrievalBundle 构建上下文与引用。
     """
+    # contract: persist layer requires non-empty message_id/kb_id/query_text
+    message_id = str(message_id or "").strip()
+    kb_id = str(kb_id or "").strip()
+    query_text = str(query_text or "").strip()
+    if not message_id:
+        raise ValueError("message_id is required")  # docstring: 必填且不可为空
+    if not kb_id:
+        raise ValueError("kb_id is required")  # docstring: 必填且不可为空
+    if not query_text:
+        raise ValueError("query_text is required")  # docstring: 必填且不可为空
+
     ctx = ctx or PipelineContext.from_session(session)  # docstring: 统一 ctx 装配
     cfg = _normalize_config(config)  # docstring: 归一化配置
 
@@ -223,14 +234,16 @@ async def run_retrieval_pipeline(
     vector_hits: List[Candidate] = []
     fused_hits: List[Candidate] = []
     final_hits: List[Candidate] = []
+    effective_fusion_strategy = str(cfg.fusion_strategy)
+    effective_rerank_strategy = str(cfg.rerank_strategy)
 
-    if str(query_text or "").strip():
+    if query_text:
         with ctx.timing.stage("keyword"):
             try:
                 keyword_hits = await keyword_mod.keyword_recall(
                     session=session,
                     kb_id=kb_id,
-                    query=str(query_text),
+                    query=query_text,
                     top_k=cfg.keyword_top_k,
                     file_id=cfg.file_id,
                     allow_fallback=cfg.keyword_allow_fallback,
@@ -268,16 +281,32 @@ async def run_retrieval_pipeline(
                 strategy=cfg.fusion_strategy,
                 top_k=cfg.fusion_top_k,
             )  # docstring: 融合去重
+            # docstring: effective strategy（unknown strategy may fallback inside fuse_candidates）
+            try:
+                effective_fusion_strategy = fusion_mod._normalize_strategy(cfg.fusion_strategy)[0]  # type: ignore[attr-defined]
+            except Exception:
+                effective_fusion_strategy = str(cfg.fusion_strategy)
         except Exception as exc:  # pragma: no cover - 逻辑兜底
             errors["fusion_error"] = f"{exc.__class__.__name__}: {exc}"  # docstring: 记录错误
-            fused_hits = list(keyword_hits) + list(vector_hits)  # docstring: 回退拼接
-            fused_hits = fused_hits[: cfg.fusion_top_k]  # docstring: 回退时仍遵守 top_k
+            # docstring: 尽量回退到一个“可枚举、可审计”的实际策略：union
+            try:
+                fused_hits = fusion_mod.fuse_candidates(
+                    keyword=keyword_hits,
+                    vector=vector_hits,
+                    strategy="union",
+                    top_k=cfg.fusion_top_k,
+                )
+                effective_fusion_strategy = "union"
+            except Exception as exc2:  # pragma: no cover - 极端兜底
+                errors["fusion_fallback_error"] = f"{exc2.__class__.__name__}: {exc2}"
+                fused_hits = (list(keyword_hits) + list(vector_hits))[: cfg.fusion_top_k]
+                effective_fusion_strategy = "union"
 
     if cfg.rerank_strategy.strip().lower() != "none" and fused_hits:
         with ctx.timing.stage("rerank"):
             try:
                 final_hits = await rerank_mod.rerank(
-                    query=str(query_text),
+                    query=query_text,
                     candidates=fused_hits,
                     strategy=cfg.rerank_strategy,
                     top_k=cfg.rerank_top_k,
@@ -291,6 +320,17 @@ async def run_retrieval_pipeline(
         ctx.timing.add_ms("rerank", 0.0, accumulate=False)  # docstring: 跳过 rerank 记 0ms
         final_hits = list(fused_hits)[: cfg.rerank_top_k]  # docstring: 无 rerank 时按 top_k 截断
 
+    # docstring: derive effective rerank strategy from output (rerank() writes 'none' on fallback)
+    if final_hits:
+        d0 = final_hits[0].score_details or {}
+        if isinstance(d0, dict) and d0.get("rerank_strategy") is not None:
+            effective_rerank_strategy = str(d0.get("rerank_strategy"))
+        else:
+            try:
+                effective_rerank_strategy = rerank_mod._normalize_strategy(cfg.rerank_strategy)[0]  # type: ignore[attr-defined]
+            except Exception:
+                effective_rerank_strategy = str(cfg.rerank_strategy)
+
     provider_snapshot = _build_provider_snapshot(
         base_snapshot=dict(ctx.provider_snapshot),
         cfg=cfg,
@@ -301,13 +341,13 @@ async def run_retrieval_pipeline(
     record_params = {
         "message_id": message_id,
         "kb_id": kb_id,
-        "query_text": str(query_text),
+        "query_text": query_text,
         "keyword_top_k": cfg.keyword_top_k,
         "vector_top_k": cfg.vector_top_k,
         "fusion_top_k": cfg.fusion_top_k,
         "rerank_top_k": cfg.rerank_top_k,
-        "fusion_strategy": cfg.fusion_strategy,
-        "rerank_strategy": cfg.rerank_strategy,
+        "fusion_strategy": effective_fusion_strategy,
+        "rerank_strategy": effective_rerank_strategy,
         "provider_snapshot": provider_snapshot,
         "timing_ms": _timing_snapshot(ctx),
     }  # docstring: RetrievalRecord 参数快照
@@ -327,8 +367,8 @@ async def run_retrieval_pipeline(
         vector_top_k=cfg.vector_top_k,
         fusion_top_k=cfg.fusion_top_k,
         rerank_top_k=cfg.rerank_top_k,
-        fusion_strategy=cast(FusionStrategy, cfg.fusion_strategy),
-        rerank_strategy=cast(RerankStrategy, cfg.rerank_strategy),
+        fusion_strategy=cast(FusionStrategy, effective_fusion_strategy),
+        rerank_strategy=cast(RerankStrategy, effective_rerank_strategy),
         provider_snapshot=provider_snapshot,
         timing_ms=record_params["timing_ms"],
     )  # docstring: 构造 RetrievalRecord schema
