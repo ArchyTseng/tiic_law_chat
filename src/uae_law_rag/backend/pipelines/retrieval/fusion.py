@@ -60,13 +60,13 @@ def _rank_candidates(candidates: Sequence[Candidate]) -> Dict[str, _RankedCandid
 def _rank_score(rank: Optional[int]) -> float:
     """
     [职责] 将 rank 转为单调分数（越靠前越高）。
-    [边界] 仅依赖 rank；缺失 rank 返回 0。
+    [边界] 仅依赖 rank；缺失 rank 返回 0；rank=1 映射为 1.0。
     [上游关系] union/weighted 融合使用。
     [下游关系] fused score 计算。
     """
     if not rank:
         return 0.0  # docstring: 无 rank 视为 0
-    return 1.0 / (1.0 + float(rank))  # docstring: rank -> (0,1] 单调分数
+    return 1.0 / float(rank)  # docstring: rank -> (0,1] 单调分数
 
 
 def _rrf_score(rank: Optional[int], rrf_k: int) -> float:
