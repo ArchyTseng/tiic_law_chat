@@ -188,6 +188,8 @@ async def test_retrieval_gate_end_to_end(session: AsyncSession) -> None:
             },
         ]  # docstring: Milvus payload
         await repo.upsert_embeddings(collection=spec.name, entities=entities)  # docstring: 写入向量
+        # docstring: ensure newly upserted data is queryable (avoid eventual consistency flakes)
+        await idx.load_collection(spec.name)
 
         kw_hits = await keyword_mod.keyword_recall(
             session=session,
@@ -200,7 +202,7 @@ async def test_retrieval_gate_end_to_end(session: AsyncSession) -> None:
 
         vec_hits = await vector_mod.vector_recall(
             milvus_repo=repo,
-            kb_scope={"kb_id": kb.id},
+            kb_scope={"kb_id": kb.id, "file_id": f.id},
             query_vector=[1.0, 0.0, 0.0, 0.0],
             top_k=2,
             output_fields=spec.search.output_fields,
@@ -209,6 +211,7 @@ async def test_retrieval_gate_end_to_end(session: AsyncSession) -> None:
         )  # docstring: vector 召回
         assert len(vec_hits) >= 1
         assert any(h.node_id == nodes[0].id for h in vec_hits)
+        assert all(h.meta.get("kb_id") == kb.id for h in vec_hits)  # docstring: scope 过滤可回放
 
         fused = fusion_mod.fuse_candidates(
             keyword=kw_hits,
@@ -259,6 +262,21 @@ async def test_retrieval_gate_end_to_end(session: AsyncSession) -> None:
         assert bundle.hits  # docstring: bundle hits 非空
         details = bundle.hits[0].score_details or {}
         assert "keyword" in details or "vector" in details  # docstring: 分数细节可解释
+
+        # docstring: ensure fused hit exists and is explainable
+        fused_hit = next((h for h in bundle.hits if h.source == "fused"), None)
+        assert fused_hit is not None
+        fused_details = fused_hit.score_details or {}
+        assert fused_details.get("fusion_strategy") == "union"
+
+        # docstring: stronger explainability assertions for keyword/vector
+        kw0 = kw_hits[0].score_details or {}
+        assert {"bm25", "fts_query", "keyword_mode"}.issubset(set(kw0.keys()))
+        vec0 = vec_hits[0].score_details or {}
+        assert {"raw_score", "metric_type"}.issubset(set(vec0.keys()))
+
+        # docstring: persist assertions: rank must be contiguous starting at 1
+        assert [h.rank for h in hits] == list(range(1, len(hits) + 1))
     finally:
         try:
             await client.drop_collection(spec.name)  # docstring: 清理 Milvus 资源
