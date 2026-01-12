@@ -103,13 +103,13 @@ def _build_hash_embedder(*, dim: int, model: str, provider: str) -> Any:
         def _get_query_embedding(self, query: str) -> List[float]:
             return self._hash_to_vec(query)  # docstring: 查询向量
 
-        async def aget_text_embedding(self, text: str) -> List[float]:
-            return self._hash_to_vec(text)
+        async def _aget_text_embedding(self, text: str) -> List[float]:
+            return self._hash_to_vec(text)  # docstring: 异步文本向量
 
-        async def aget_query_embedding(self, query: str) -> List[float]:
-            return self._hash_to_vec(query)
+        async def _aget_query_embedding(self, query: str) -> List[float]:
+            return self._hash_to_vec(query)  # docstring: 异步查询向量
 
-        async def aget_text_embedding_batch(self, texts: List[str]) -> List[List[float]]:
+        async def _aget_text_embedding_batch(self, texts: List[str]) -> List[List[float]]:
             return [self._hash_to_vec(t) for t in texts]
 
     return _HashEmbedding(dim=dim, model_name=model, provider_name=provider)
