@@ -89,7 +89,7 @@ class TimingCollector:
         """
         return _now_ms() - self._start_ms
 
-    def to_dict(self, *, include_total: bool = True, total_key: str = "total") -> Dict[str, float]:
+    def to_dict(self, *, include_total: bool = True, total_key: str = "total_ms") -> Dict[str, float]:
         """
         [职责] 导出可 JSON 序列化的 timing dict（ms）。
         [边界] 仅导出 float；不包含嵌套结构；key 可自定义（默认 total）。

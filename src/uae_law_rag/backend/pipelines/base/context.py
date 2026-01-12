@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from uae_law_rag.backend.schemas.audit import TraceContext
 from uae_law_rag.backend.schemas.ids import UUIDStr, new_uuid
 from uae_law_rag.backend.db.repo.ingest_repo import IngestRepo
 from uae_law_rag.backend.db.repo.retrieval_repo import RetrievalRepo
@@ -45,6 +46,8 @@ class PipelineContext:
         default_factory=new_uuid
     )  # docstring: 单次链路追踪ID（可跨 retrieval/generation/eval 复用）
     request_id: UUIDStr = field(default_factory=new_uuid)  # docstring: 单次请求ID（可由上游注入覆盖）
+    parent_request_id: Optional[UUIDStr] = None  # docstring: 上游请求ID（可用于批处理/链式调用）
+    trace_tags: Dict[str, Any] = field(default_factory=dict)  # docstring: trace 扩展标签（env/build/user-agent等）
 
     # timing collector
     timing: TimingCollector = field(default_factory=TimingCollector)
@@ -60,8 +63,11 @@ class PipelineContext:
         cls,
         session: AsyncSession,
         *,
+        trace_context: Optional[TraceContext] = None,
         trace_id: Optional[str] = None,
         request_id: Optional[str] = None,
+        parent_request_id: Optional[str] = None,
+        trace_tags: Optional[Dict[str, Any]] = None,
         provider_snapshot: Optional[Dict[str, Any]] = None,
         meta: Optional[Dict[str, Any]] = None,
     ) -> "PipelineContext":
@@ -71,20 +77,45 @@ class PipelineContext:
         [上游关系] services/api/测试 fixture 注入 session 后调用。
         [下游关系] pipelines 使用 ctx.* 访问 repos/timing/trace。
         """
+
+        def _as_uuid_str(v: Optional[str]) -> Optional[UUIDStr]:
+            if v is None:
+                return None
+            s = str(v).strip()
+            if not s:
+                return None
+            return UUIDStr(s)
+
+        base_trace_id: Optional[UUIDStr] = _as_uuid_str(
+            trace_id or (str(trace_context.trace_id) if trace_context else None)
+        )
+        base_request_id: Optional[UUIDStr] = _as_uuid_str(
+            request_id or (str(trace_context.request_id) if trace_context else None)
+        )
+        base_parent_request_id: Optional[UUIDStr] = _as_uuid_str(
+            parent_request_id
+            or (str(trace_context.parent_request_id) if trace_context and trace_context.parent_request_id else None)
+        )
+        base_trace_tags: Dict[str, Any] = dict(trace_context.tags) if trace_context else {}
+        if trace_tags:
+            base_trace_tags.update(trace_tags)
+
         return cls(
             session=session,
             ingest_repo=IngestRepo(session),
             retrieval_repo=RetrievalRepo(session),
             generation_repo=GenerationRepo(session),
             evaluator_repo=EvaluatorRepo(session),
-            trace_id=UUIDStr(trace_id) if trace_id else new_uuid(),
-            request_id=UUIDStr(request_id) if request_id else new_uuid(),
+            trace_id=base_trace_id or new_uuid(),
+            request_id=base_request_id or new_uuid(),
+            parent_request_id=base_parent_request_id,
+            trace_tags=base_trace_tags,
             timing=TimingCollector(),
             provider_snapshot=provider_snapshot or {},
             meta=meta or {},
         )
 
-    def timing_ms(self, *, include_total: bool = True, total_key: str = "total") -> Dict[str, float]:
+    def timing_ms(self, *, include_total: bool = True, total_key: str = "total_ms") -> Dict[str, float]:
         """
         [职责] 导出 timing_ms（JSON dict）供 DB 落库或返回结果使用。
         [边界] 不做字段映射；key 与 TimingCollector 保持一致。
@@ -103,7 +134,21 @@ class PipelineContext:
         k = str(kind).strip()
         if not k:
             return
-        self.provider_snapshot[k] = snapshot
+        self.provider_snapshot[k] = dict(snapshot)
+
+    def as_trace_context(self) -> TraceContext:
+        """
+        [职责] 导出 TraceContext（供 services/api/debug 透传）。
+        [边界] 不追加 meta；仅回传 trace_id/request_id/parent_request_id/tags。
+        [上游关系] services 需要输出 debug trace 或串联上下游链路时调用。
+        [下游关系] schemas.audit.TraceContext。
+        """
+        return TraceContext(
+            trace_id=self.trace_id,
+            request_id=self.request_id,
+            parent_request_id=self.parent_request_id,
+            tags=dict(self.trace_tags),
+        )
 
     def get_flag(self, key: str, default: Any = None) -> Any:
         """
