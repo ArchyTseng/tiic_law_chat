@@ -212,11 +212,13 @@ def _apply_rerank_result(
     for rank, (idx, cand) in enumerate(ordered, start=1):
         if len(out) >= int(top_k):
             break  # docstring: 截断 top_k
-        rerank_score = float(scores.get(idx, cand.score))  # docstring: rerank 分数兜底
+        applied = idx in scores  # docstring: 是否被 rerank 覆盖
+        rerank_score = float(scores[idx]) if applied else float(cand.score)  # docstring: 未覆盖则继承原 score
         details = dict(cand.score_details or {})  # docstring: 复制分数细节
         details.update(
             {
-                "rerank_score": rerank_score,
+                "rerank_applied": applied,
+                "rerank_score": float(scores[idx]) if applied else None,
                 "rerank_strategy": strategy,
                 "rerank_model": model,
                 "rerank_rank": rank,
