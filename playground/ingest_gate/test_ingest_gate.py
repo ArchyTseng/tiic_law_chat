@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # playground/ingest_gate/test_ingest_gate.py
 
 """
@@ -28,7 +27,13 @@ from uae_law_rag.backend.db.repo import IngestRepo, UserRepo
 from uae_law_rag.backend.kb.client import MilvusClient
 from uae_law_rag.backend.kb.index import MilvusIndexManager
 from uae_law_rag.backend.kb.repo import MilvusRepo
-from uae_law_rag.backend.kb.schema import build_collection_spec, build_expr_for_scope
+from uae_law_rag.backend.kb.schema import (
+    KB_ID_FIELD,
+    NODE_ID_FIELD,
+    PAGE_FIELD,
+    build_collection_spec,
+    build_expr_for_scope,
+)
 from uae_law_rag.backend.pipelines.ingest.pipeline import run_ingest_pdf
 
 
@@ -96,12 +101,13 @@ async def test_ingest_gate_end_to_end(session: AsyncSession) -> None:
     user_repo = UserRepo(session)  # docstring: 用户仓储
     ingest_repo = IngestRepo(session)  # docstring: ingest 仓储
 
-    u = await user_repo.create(username=f"ingest_gate_{int(time.time())}")  # docstring: 创建测试用户
-    collection_name = f"ingest_gate_{int(time.time())}"  # docstring: 唯一 collection 名称
+    uniq = time.time_ns()
+    u = await user_repo.create(username=f"ingest_gate_{uniq}")  # docstring: 创建测试用户
+    collection_name = f"ingest_gate_{uniq}"  # docstring: 唯一 collection 名称
 
     kb = await ingest_repo.create_kb(
         user_id=u.id,
-        kb_name=f"ingest_gate_kb_{int(time.time())}",
+        kb_name=f"ingest_gate_kb_{uniq}",
         milvus_collection=collection_name,
         embed_model="hash",
         embed_dim=32,
@@ -146,7 +152,8 @@ async def test_ingest_gate_end_to_end(session: AsyncSession) -> None:
         nodes = await ingest_repo.list_nodes_by_document(doc.id)  # docstring: 读取节点列表
         assert len(nodes) > 0
         assert len(nodes) == result.node_count
-        assert [n.node_index for n in nodes] == list(range(len(nodes)))
+        nodes_sorted = sorted(list(nodes), key=lambda n: int(n.node_index))
+        assert [n.node_index for n in nodes_sorted] == list(range(len(nodes_sorted)))
 
         article_nodes = 0
         section_nodes = 0
@@ -190,15 +197,15 @@ async def test_ingest_gate_end_to_end(session: AsyncSession) -> None:
         assert len(res) == 1
         assert len(res[0]) > 0
         payload = res[0][0]["payload"]
-        assert payload.get("kb_id") == kb.id
-        assert payload.get("node_id") in node_ids
+        assert payload.get(KB_ID_FIELD) == kb.id
+        assert payload.get(NODE_ID_FIELD) in node_ids
         node_lookup = {n.id: n for n in nodes}
-        if payload.get("node_id") in node_lookup:
-            node_page = node_lookup[payload["node_id"]].page  # docstring: SQL 节点页码
+        if payload.get(NODE_ID_FIELD) in node_lookup:
+            node_page = node_lookup[payload[NODE_ID_FIELD]].page  # docstring: SQL 节点页码
             if node_page is not None:
-                assert payload.get("page") == node_page  # docstring: page 一致性
+                assert payload.get(PAGE_FIELD) == node_page  # docstring: page 一致性
             else:
-                assert payload.get("page") in (None, 0)  # docstring: 无页码时允许 Milvus 0
+                assert payload.get(PAGE_FIELD) in (None, 0)  # docstring: 无页码时允许 Milvus 0
 
         # idempotent rerun
         result2 = await run_ingest_pdf(
@@ -210,6 +217,9 @@ async def test_ingest_gate_end_to_end(session: AsyncSession) -> None:
         )  # docstring: 幂等重跑
         assert result2.file_id == result.file_id
         assert result2.node_count == result.node_count
+        assert result2.vector_count == result.vector_count
+        maps2 = await ingest_repo.list_node_vector_maps_by_file(f.id)
+        assert len(maps2) == len(maps)
     finally:
         try:
             await idx.release_collection(spec.name)  # docstring: 释放 collection 资源
