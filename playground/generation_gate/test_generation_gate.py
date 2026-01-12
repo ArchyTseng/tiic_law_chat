@@ -10,8 +10,9 @@
 
 from __future__ import annotations
 
+import json
 import time
-from typing import List, Set, cast
+from typing import Any, Awaitable, Callable, Dict, List, Set, cast
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +26,7 @@ from uae_law_rag.backend.db.repo import (
     UserRepo,
 )
 from uae_law_rag.backend.pipelines.base.context import PipelineContext
+from uae_law_rag.backend.pipelines.generation import generator as generator_mod
 from uae_law_rag.backend.pipelines.generation import pipeline as pipeline_mod
 from uae_law_rag.backend.schemas.ids import KnowledgeBaseId, MessageId, NodeId, RetrievalRecordId, UUIDStr
 from uae_law_rag.backend.schemas.retrieval import (
@@ -48,8 +50,41 @@ def _hit_nodes(hits: List[RetrievalHit]) -> Set[str]:
     return {str(h.node_id) for h in hits}  # docstring: node_id 去重集合
 
 
+def _make_fake_generation(raw_text: str) -> Callable[..., Awaitable[Dict[str, Any]]]:
+    """
+    [职责] 构造可注入的 fake run_generation（用于 gate 的确定性输出）。
+    [边界] 仅返回固定 raw_text；不模拟真实模型行为。
+    [上游关系] generation_gate 调用。
+    [下游关系] monkeypatch 覆盖 generator.run_generation。
+    """
+
+    async def _fake_run_generation(
+        *,
+        messages_snapshot: Dict[str, Any],
+        model_provider: str,
+        model_name: str,
+        generation_config: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        [职责] 返回固定 raw_text 的 mock 结果。
+        [边界] 忽略 messages_snapshot 内容；仅用于 gate 行为锁定。
+        [上游关系] generation pipeline 调用。
+        [下游关系] postprocess 接收 raw_text。
+        """
+        _ = messages_snapshot  # docstring: 保留参数以对齐签名
+        _ = generation_config  # docstring: 保留参数以对齐签名
+        return {
+            "raw_text": str(raw_text),
+            "provider": str(model_provider),
+            "model": str(model_name),
+            "usage": None,
+        }  # docstring: 固定生成结果
+
+    return _fake_run_generation
+
+
 @pytest.mark.asyncio
-async def test_generation_gate_end_to_end(session: AsyncSession) -> None:
+async def test_generation_gate_end_to_end(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """
     [职责] 验证生成链路的最小可用闭环（prompt→LLM→postprocess→persist）。
     [边界] 不依赖外部 LLM；使用 mock provider；不覆盖 evaluator。
@@ -178,6 +213,19 @@ async def test_generation_gate_end_to_end(session: AsyncSession) -> None:
         )
     ]  # docstring: 构造 RetrievalHit schema 列表
     retrieval_bundle = RetrievalBundle(record=retrieval_record, hits=hits)  # docstring: 组装 RetrievalBundle
+
+    raw_payload = {
+        "answer": "Based on evidence, see citations.",
+        "citations": [
+            {"node_id": str(nodes[0].id), "rank": 1, "quote": "Scope of application."},
+        ],
+    }  # docstring: 固定输出 payload
+    raw_text = json.dumps(raw_payload, ensure_ascii=True)  # docstring: 固定输出 JSON
+    monkeypatch.setattr(
+        generator_mod,
+        "run_generation",
+        _make_fake_generation(raw_text),
+    )  # docstring: 覆盖 LLM 调用以保证确定性
 
     ctx = PipelineContext.from_session(session)  # docstring: 构造 pipeline ctx
     config = {
