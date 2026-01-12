@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from uuid import UUID
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, cast
 
 from uae_law_rag.backend.schemas.generation import Citation
@@ -292,6 +293,18 @@ def _merge_locator(base: Optional[Mapping[str, Any]], fallback: Optional[Mapping
     return out
 
 
+def _is_uuid(value: str) -> bool:
+    """
+    [职责] 判断字符串是否为 UUID（用于 node_id 运行时校验）。
+    [边界] 仅做格式校验；不校验其是否存在于 hits。
+    """
+    try:
+        UUID(str(value))
+        return True
+    except Exception:
+        return False
+
+
 def _build_citation(
     *,
     parsed: Mapping[str, Any],
@@ -306,6 +319,9 @@ def _build_citation(
     [下游关系] PostprocessResult.citations。
     """
     node_id_raw = _coerce_str(parsed.get("node_id")) or ""  # docstring: node_id 原始值
+    # docstring: 运行时校验 UUID，避免 Citation 构造阶段抛异常导致 postprocess 崩溃
+    if not _is_uuid(node_id_raw):
+        raise ValueError("node_id is not a valid UUID")
     node_id = cast(NodeId, UUIDStr(node_id_raw))  # docstring: node_id 类型对齐
     rank = _coerce_int(parsed.get("rank"))  # docstring: rank 解析
     if rank is None:
@@ -350,12 +366,13 @@ def postprocess_generation(
     payload, parse_error = _parse_json(raw_text, strict=cfg.strict_json)  # docstring: 解析 JSON
     if parse_error:
         status = _merge_status(status, cfg.parse_error_status)  # docstring: 解析失败状态
+        errors.append(parse_error)  # docstring: 统一错误收集
         return {
             "answer": "",
             "citations": [],
             "output_structured": None,
             "status": status,
-            "error_message": parse_error,
+            "error_message": "; ".join(errors),
         }  # docstring: JSON 解析失败直接返回
 
     answer, answer_error = _extract_answer(payload or {})  # docstring: 提取 answer
@@ -391,12 +408,16 @@ def postprocess_generation(
         if not hit:
             missing_count += 1  # docstring: 引用不在 hits 中
             continue
-        citation = _build_citation(
-            parsed=parsed,
-            hit=hit,
-            rank_fallback=idx,
-            max_quote_chars=cfg.max_quote_chars,
-        )  # docstring: 构造对齐 Citation
+        try:
+            citation = _build_citation(
+                parsed=parsed,
+                hit=hit,
+                rank_fallback=idx,
+                max_quote_chars=cfg.max_quote_chars,
+            )  # docstring: 构造对齐 Citation
+        except Exception:
+            invalid_count += 1  # docstring: citation 构造失败视为无效引用
+            continue
         citations.append(citation)  # docstring: 收集 citation
         seen.add(node_id)  # docstring: 记录已处理 node_id
 
@@ -417,7 +438,15 @@ def postprocess_generation(
         if missing_count > 0:
             errors.append(f"missing citations: {missing_count}")  # docstring: 记录缺失计数
 
-    citation_payload = [c.model_dump() for c in citations]  # docstring: citation 序列化
+    # docstring: 兼容 pydantic v2 / 其他实现
+    citation_payload: List[Dict[str, Any]] = []
+    for c in citations:
+        if hasattr(c, "model_dump"):
+            citation_payload.append(c.model_dump())  # type: ignore[attr-defined]
+        elif hasattr(c, "dict"):
+            citation_payload.append(c.dict())  # type: ignore[call-arg]
+        else:
+            citation_payload.append(dict(getattr(c, "__dict__", {})))
     output_structured = dict(payload or {})  # docstring: 保留原始结构
     output_structured["answer"] = answer  # docstring: 覆盖 answer
     output_structured["citations"] = citation_payload  # docstring: 覆盖 citations
