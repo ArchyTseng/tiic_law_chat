@@ -240,7 +240,15 @@ def _build_citations_payload(citations: Sequence[Citation]) -> CitationsPayload:
     if not citations:
         return CitationsPayload()  # docstring: 空 citations 直接返回默认
     nodes = [c.node_id for c in citations]  # docstring: node_id 列表
-    items = [c.model_dump() for c in citations]  # docstring: citation items
+    # docstring: 兼容 pydantic v2 / v1 / dataclass-like
+    items: List[Dict[str, Any]] = []
+    for c in citations:
+        if hasattr(c, "model_dump"):
+            items.append(c.model_dump())  # type: ignore[attr-defined]
+        elif hasattr(c, "dict"):
+            items.append(c.dict())  # type: ignore[call-arg]
+        else:
+            items.append(dict(getattr(c, "__dict__", {})))
     return CitationsPayload(version="v1", nodes=nodes, items=items, meta={})  # docstring: payload 组装
 
 
@@ -402,7 +410,8 @@ async def run_generation_pipeline(
     status = str(post_result.get("status") or "failed")  # docstring: postprocess 状态
     if gen_error:
         status = _merge_status(status, "failed")  # docstring: LLM 错误标记 failed
-    if not hits:
+    # docstring: no_evidence 策略仅在明确“跳过 LLM”的路径中强制应用，避免覆盖 postprocess 策略
+    if not hits and not cfg.no_evidence_use_llm:
         status = _merge_status(status, cfg.no_evidence_status)  # docstring: no_evidence 状态策略
     if status not in _STATUS_ORDER:
         status = "failed"  # docstring: 状态兜底
@@ -412,7 +421,8 @@ async def run_generation_pipeline(
         error_messages.append(str(post_result.get("error_message")))  # docstring: postprocess 错误
     if gen_error:
         error_messages.append(str(gen_error))  # docstring: LLM 错误
-    if not hits:
+    # docstring: 仅在跳过 LLM 的 no_evidence 分支记录该标记，避免误导审计
+    if not hits and not cfg.no_evidence_use_llm:
         error_messages.append("no_evidence")  # docstring: no_evidence 标记
     error_message = "; ".join([m for m in error_messages if m]) or None  # docstring: 错误合并
 
@@ -434,7 +444,14 @@ async def run_generation_pipeline(
 
     messages_snapshot["provider_snapshot"] = provider_snapshot  # docstring: 写入 provider 快照
     messages_snapshot["timing_ms"] = timing_ms  # docstring: 写入 timing 快照
-    messages_snapshot["trace"] = ctx.as_trace_context().model_dump()  # docstring: 写入 trace 快照
+    # docstring: trace 快照尽量写入可序列化 dict
+    trace_ctx = ctx.as_trace_context()
+    if hasattr(trace_ctx, "model_dump"):
+        messages_snapshot["trace"] = trace_ctx.model_dump()  # type: ignore[attr-defined]
+    elif hasattr(trace_ctx, "dict"):
+        messages_snapshot["trace"] = trace_ctx.dict()  # type: ignore[call-arg]
+    else:
+        messages_snapshot["trace"] = str(trace_ctx)
 
     record_params = {
         "message_id": message_id,
