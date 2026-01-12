@@ -10,12 +10,12 @@
 from __future__ import annotations
 
 import re
-from typing import Any, List, Literal, Optional, Sequence
+from typing import List, Literal, Optional, Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from uae_law_rag.backend.db.fts import KeywordHit, search_nodes
-from uae_law_rag.backend.pipelines.retrieval.types import Candidate
+from uae_law_rag.backend.pipelines.retrieval.types import Candidate, _coerce_int
 
 CandidateStage = Literal["keyword", "vector", "fusion", "rerank"]  # docstring: 检索阶段枚举
 
@@ -93,14 +93,6 @@ def _hit_to_candidate(
         "keyword_strategy": "fts5",
     }  # docstring: 可解释分数细节
     excerpt = str(hit.snippet or "") or None  # docstring: 命中片段（可空）
-
-    def _coerce_int(v: Any) -> Optional[int]:
-        if v is None:
-            return None
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            return None
 
     return Candidate(
         node_id=str(hit.node_id),  # docstring: 节点ID

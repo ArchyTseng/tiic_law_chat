@@ -12,7 +12,21 @@ from dataclasses import dataclass
 from typing import Any, Dict, Literal, Optional
 
 
+__all__ = [
+    "_coerce_int",
+    "Candidate",
+]
+
 CandidateStage = Literal["keyword", "vector", "fusion", "rerank"]  # docstring: 检索阶段枚举
+
+
+def _coerce_int(v: Any) -> Optional[int]:
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass(frozen=True)

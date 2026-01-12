@@ -22,7 +22,7 @@ from uae_law_rag.backend.kb.schema import (
     SECTION_PATH_FIELD,
     build_expr_for_scope,
 )
-from uae_law_rag.backend.pipelines.retrieval.types import Candidate
+from uae_law_rag.backend.pipelines.retrieval.types import Candidate, _coerce_int
 
 
 MetricType = Literal["IP", "L2", "COSINE"]  # docstring: 向量度量类型（与 Milvus metric 对齐）
@@ -152,8 +152,11 @@ def _hit_to_candidate(
         return None  # docstring: 无 node_id 无法回查证据
 
     vector_id = str(hit.get("vector_id") or "")  # docstring: 向量主键
-    raw_score = float(hit.get("score") or 0.0)  # docstring: 原始向量分数
-    norm_score = _normalize_vector_score(raw_score, metric_type)  # docstring: 统一分数方向
+    _raw = hit.get("score")  # docstring: 原始向量分数（可能为空）
+    raw_score = float(_raw) if _raw is not None else None
+    norm_score = (
+        _normalize_vector_score(float(raw_score), metric_type) if raw_score is not None else 0.0
+    )  # docstring: 缺失分数降级
 
     meta = dict(payload)  # docstring: 透传 payload 元数据
     if vector_id:
@@ -173,8 +176,8 @@ def _hit_to_candidate(
         score_details=score_details,  # docstring: 分数细节快照
         excerpt=None,  # docstring: 向量召回无 snippet
         page=_normalize_page(payload.get(PAGE_FIELD)),  # docstring: 页码快照
-        start_offset=payload.get("start_offset"),  # docstring: 起始偏移（如有）
-        end_offset=payload.get("end_offset"),  # docstring: 结束偏移（如有）
+        start_offset=_coerce_int(payload.get("start_offset")),  # docstring: 起始偏移（如有）
+        end_offset=_coerce_int(payload.get("end_offset")),  # docstring: 结束偏移（如有）
         meta=meta,  # docstring: 透传 meta
     )
 
