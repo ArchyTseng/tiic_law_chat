@@ -24,7 +24,12 @@ def _coerce_int(v: Any) -> Optional[int]:
     if v is None:
         return None
     try:
-        return int(v)
+        if isinstance(v, int):
+            return v
+        if isinstance(v, float):
+            return int(v)
+        if isinstance(v, str) and v.strip().isdigit():
+            return int(v.strip())
     except (TypeError, ValueError):
         return None
 
