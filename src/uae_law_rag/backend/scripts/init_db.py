@@ -31,7 +31,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--db-url", dest="db_url", default=None)  # docstring: 显式 DB 连接串
     parser.add_argument("--drop", action="store_true")  # docstring: 先 drop 再 create
     parser.add_argument("--seed", action="store_true")  # docstring: 显式种子数据入口
-    parser.add_argument("--echo", action="store_true", default=None)  # docstring: 打开 SQL echo（默认跟随环境变量）
+    # docstring: SQL echo 三态开关：默认 None（由 engine/环境决定）；--echo 强制 True；--no-echo 强制 False
+    echo_group = parser.add_mutually_exclusive_group()
+    echo_group.add_argument("--echo", dest="echo", action="store_true", default=None)
+    echo_group.add_argument("--no-echo", dest="echo", action="store_false")
     parser.add_argument("--json", action="store_true")  # docstring: 仅输出 JSON 结果
     return parser
 
@@ -56,7 +59,12 @@ async def _maybe_seed(*, engine: AsyncEngine, enabled: bool) -> Dict[str, Any]:
     """
     if not enabled:
         return {"seeded": False, "seed_status": "skipped"}  # docstring: 未开启则跳过
-    raise RuntimeError("seed is not implemented")  # docstring: 明确提示需单独实现
+    # docstring: Phase A/M1 期间不写入任何业务数据；仅保留扩展点且不阻断 init_db 主流程
+    _ = engine  # docstring: 占位使用，避免未使用参数警告
+    return {
+        "seeded": False,
+        "seed_status": "not_implemented",
+    }  # docstring: 显式告知尚未实现，但不视为 init_db 失败
 
 
 async def _run_async(
@@ -77,7 +85,7 @@ async def _run_async(
     result: Dict[str, Any] = {
         "ok": True,
         "db_url": str(engine.url),
-        "echo": bool(engine.echo),
+        "echo": engine.echo,
         "dropped": False,
         "created": False,
         "seeded": False,
@@ -151,7 +159,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "dropped": bool(args.drop),
             "created": False,
             "seeded": False,
-            "seed_status": "failed",
+            "seed_status": "skipped",
             "duration_ms": 0.0,
             "error": f"{exc.__class__.__name__}: {exc}",
         }  # docstring: 异常结果
