@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import time
 from typing import Any, Dict, List
 
@@ -33,6 +34,50 @@ from uae_law_rag.backend.pipelines.retrieval import vector as vector_mod
 pytestmark = pytest.mark.retrieval_gate
 
 
+_ENV_BOOTSTRAPPED = False  # docstring: 防止重复加载 .env
+
+
+def _load_dotenv(path: "Path") -> None:
+    """
+    [职责] 轻量加载 .env 到进程环境变量（无第三方依赖）。
+    [边界] 不覆盖已存在的 env；不解析复杂格式。
+    [上游关系] _ensure_env_loaded 调用。
+    [下游关系] _milvus_env 读取 MILVUS_* 变量。
+    """
+    if not path.exists():
+        return  # docstring: 无 .env 直接跳过
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue  # docstring: 跳过空行与注释
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()  # docstring: 兼容 export 写法
+        if "=" not in line:
+            continue  # docstring: 非键值行忽略
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue  # docstring: 保留现有 env
+        val = value.strip().strip("'").strip('"')  # docstring: 去除包裹引号
+        os.environ[key] = val  # docstring: 写入环境变量
+
+
+def _ensure_env_loaded() -> None:
+    """
+    [职责] 确保 .env 已加载到进程环境变量。
+    [边界] 仅加载一次；不覆盖已有 env。
+    [上游关系] _milvus_env 调用。
+    [下游关系] 让 gate tests 能读取 MILVUS_*。
+    """
+    global _ENV_BOOTSTRAPPED
+    if _ENV_BOOTSTRAPPED:
+        return  # docstring: 避免重复加载
+    from pathlib import Path
+
+    _load_dotenv(Path(__file__).resolve().parents[2] / ".env")  # docstring: 加载项目根目录 .env
+    _ENV_BOOTSTRAPPED = True  # docstring: 标记已加载
+
+
 def _milvus_env() -> Dict[str, str]:
     """
     [职责] 读取 Milvus 连接环境变量。
@@ -40,6 +85,7 @@ def _milvus_env() -> Dict[str, str]:
     [上游关系] gate test 调用。
     [下游关系] _should_skip 判定。
     """
+    _ensure_env_loaded()  # docstring: 先加载 .env
     uri = os.getenv("MILVUS_URI", "").strip()
     url = os.getenv("MILVUS_URL", "").strip()  # docstring: 兼容 infra/compose 常用变量
     if not uri and url:
