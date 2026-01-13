@@ -8,6 +8,8 @@ from typing import List, Optional, TYPE_CHECKING
 from sqlalchemy import Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from uae_law_rag.backend.utils.constants import MESSAGE_ID_KEY
+
 from ..base import Base, TimestampMixin
 
 if TYPE_CHECKING:
@@ -25,7 +27,7 @@ class RetrievalRecordModel(Base, TimestampMixin):
     """
 
     __tablename__ = "retrieval_record"
-    __table_args__ = (UniqueConstraint("message_id", name="uq_retrieval_record_message"),)
+    __table_args__ = (UniqueConstraint(MESSAGE_ID_KEY, name="uq_retrieval_record_message"),)
 
     id: Mapped[str] = mapped_column(
         String(36),

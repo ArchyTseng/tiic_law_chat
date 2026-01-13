@@ -26,6 +26,16 @@ from uae_law_rag.backend.schemas.generation import (
 )
 from uae_law_rag.backend.schemas.ids import GenerationRecordId, MessageId, RetrievalRecordId, UUIDStr
 from uae_law_rag.backend.schemas.retrieval import RetrievalBundle, RetrievalHit
+from uae_law_rag.backend.utils.constants import (
+    MESSAGE_ID_KEY,
+    PROMPT_NAME_KEY,
+    PROMPT_VERSION_KEY,
+    PROVIDER_SNAPSHOT_KEY,
+    RETRIEVAL_RECORD_ID_KEY,
+    TIMING_MS_KEY,
+    TIMING_TOTAL_KEY,
+    TRACE_KEY,
+)
 
 from . import generator as generator_mod
 from . import persist as persist_mod
@@ -90,11 +100,11 @@ def _normalize_config(config: Optional[Mapping[str, Any]]) -> _GenerationConfig:
         return bool(default if val is None else val)  # docstring: bool 兜底
 
     prompt_name = _as_str(
-        "prompt_name", str(prompt_cfg.get("prompt_name") or prompt_cfg.get("name") or "")
+        PROMPT_NAME_KEY, str(prompt_cfg.get(PROMPT_NAME_KEY) or prompt_cfg.get("name") or "")
     )  # docstring: prompt 名称
-    prompt_version = _as_opt_str("prompt_version")  # docstring: prompt 版本
+    prompt_version = _as_opt_str(PROMPT_VERSION_KEY)  # docstring: prompt 版本
     if prompt_version is None:
-        pv_raw = prompt_cfg.get("prompt_version") or prompt_cfg.get("version")  # docstring: prompt 版本兜底值
+        pv_raw = prompt_cfg.get(PROMPT_VERSION_KEY) or prompt_cfg.get("version")  # docstring: prompt 版本兜底值
         pv_text = str(pv_raw or "").strip()  # docstring: prompt 版本归一化
         prompt_version = pv_text or None  # docstring: 空字符串回退 None
     max_excerpt_chars = _as_int(
@@ -155,7 +165,7 @@ def _timing_snapshot(ctx: PipelineContext) -> Dict[str, float]:
     [上游关系] run_generation_pipeline 调用。
     [下游关系] messages_snapshot.timing_ms。
     """
-    return ctx.timing.to_dict(include_total=True, total_key="total")  # docstring: total 使用一致 key
+    return ctx.timing.to_dict(include_total=True, total_key=TIMING_TOTAL_KEY)  # docstring: total 使用一致 key
 
 
 def _build_provider_snapshot(
@@ -175,8 +185,8 @@ def _build_provider_snapshot(
     """
     snapshot = dict(base_snapshot or {})  # docstring: 基础快照复制
     snapshot["prompt"] = {
-        "prompt_name": prompt_name,
-        "prompt_version": prompt_version,
+        PROMPT_NAME_KEY: prompt_name,
+        PROMPT_VERSION_KEY: prompt_version,
         "max_excerpt_chars": cfg.max_excerpt_chars,
     }  # docstring: prompt 快照
     snapshot["generation"] = {
@@ -266,8 +276,8 @@ def _fallback_messages_snapshot(
     [下游关系] GenerationRecord.messages_snapshot。
     """
     return {
-        "prompt_name": prompt_name,
-        "prompt_version": prompt_version,
+        PROMPT_NAME_KEY: prompt_name,
+        PROMPT_VERSION_KEY: prompt_version,
         "query": str(query_text or ""),
         "messages": [],
         "evidence": [],
@@ -330,14 +340,14 @@ async def run_generation_pipeline(
                 error=prompt_error,
             )  # docstring: 兜底 messages_snapshot
 
-    prompt_name = str(messages_snapshot.get("prompt_name") or cfg.prompt_name or "")  # docstring: prompt 名称
+    prompt_name = str(messages_snapshot.get(PROMPT_NAME_KEY) or cfg.prompt_name or "")  # docstring: prompt 名称
     if not prompt_name:
         prompt_name = prompt_mod.DEFAULT_PROMPT_NAME  # docstring: prompt 名称兜底
     prompt_version = cast(
-        Optional[str], messages_snapshot.get("prompt_version") or cfg.prompt_version
+        Optional[str], messages_snapshot.get(PROMPT_VERSION_KEY) or cfg.prompt_version
     )  # docstring: prompt 版本
-    messages_snapshot["prompt_name"] = prompt_name  # docstring: 回写 prompt_name
-    messages_snapshot["prompt_version"] = prompt_version  # docstring: 回写 prompt_version
+    messages_snapshot[PROMPT_NAME_KEY] = prompt_name  # docstring: 回写 prompt_name
+    messages_snapshot[PROMPT_VERSION_KEY] = prompt_version  # docstring: 回写 prompt_version
 
     ctx.with_provider(
         "llm",
@@ -442,22 +452,22 @@ async def run_generation_pipeline(
     )  # docstring: provider 快照
     timing_ms = _timing_snapshot(ctx)  # docstring: timing 快照
 
-    messages_snapshot["provider_snapshot"] = provider_snapshot  # docstring: 写入 provider 快照
-    messages_snapshot["timing_ms"] = timing_ms  # docstring: 写入 timing 快照
+    messages_snapshot[PROVIDER_SNAPSHOT_KEY] = provider_snapshot  # docstring: 写入 provider 快照
+    messages_snapshot[TIMING_MS_KEY] = timing_ms  # docstring: 写入 timing 快照
     # docstring: trace 快照尽量写入可序列化 dict
     trace_ctx = ctx.as_trace_context()
     if hasattr(trace_ctx, "model_dump"):
-        messages_snapshot["trace"] = trace_ctx.model_dump()  # type: ignore[attr-defined]
+        messages_snapshot[TRACE_KEY] = trace_ctx.model_dump()  # type: ignore[attr-defined]
     elif hasattr(trace_ctx, "dict"):
-        messages_snapshot["trace"] = trace_ctx.dict()  # type: ignore[call-arg]
+        messages_snapshot[TRACE_KEY] = trace_ctx.dict()  # type: ignore[call-arg]
     else:
-        messages_snapshot["trace"] = str(trace_ctx)
+        messages_snapshot[TRACE_KEY] = str(trace_ctx)
 
     record_params = {
-        "message_id": message_id,
-        "retrieval_record_id": retrieval_record_id,
-        "prompt_name": prompt_name or cfg.prompt_name,
-        "prompt_version": prompt_version,
+        MESSAGE_ID_KEY: message_id,
+        RETRIEVAL_RECORD_ID_KEY: retrieval_record_id,
+        PROMPT_NAME_KEY: prompt_name or cfg.prompt_name,
+        PROMPT_VERSION_KEY: prompt_version,
         "model_provider": cfg.model_provider,
         "model_name": cfg.model_name,
         "messages_snapshot": messages_snapshot,

@@ -14,6 +14,8 @@ from typing import List, Optional, Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from uae_law_rag.backend.utils.constants import META_DATA_KEY
+
 from ..models.doc import (
     DocumentModel,
     KnowledgeBaseModel,
@@ -182,7 +184,7 @@ class IngestRepo:
                 end_offset=n.get("end_offset"),  # docstring: 结束偏移
                 article_id=n.get("article_id"),  # docstring: 法条标识
                 section_path=n.get("section_path"),  # docstring: 结构路径
-                meta_data=n.get("meta_data") or {},  # docstring: 扩展元数据
+                meta_data=n.get(META_DATA_KEY) or {},  # docstring: 扩展元数据
             )
             objs.append(obj)
         self._session.add_all(objs)
@@ -207,7 +209,7 @@ class IngestRepo:
                 file_id=file_id,  # docstring: 归属文件（便于批量删除/重建）
                 node_id=str(m["node_id"]),  # docstring: 节点ID
                 vector_id=str(m["vector_id"]),  # docstring: Milvus 主键
-                meta_data=m.get("meta_data") or {},  # docstring: 映射元数据（collection/partition等）
+                meta_data=m.get(META_DATA_KEY) or {},  # docstring: 映射元数据（collection/partition等）
                 is_active=True,  # docstring: 映射有效
             )
             objs.append(obj)

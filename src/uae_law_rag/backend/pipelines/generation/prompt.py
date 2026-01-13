@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from uae_law_rag.backend.schemas.retrieval import RetrievalHit
+from uae_law_rag.backend.utils.constants import PROMPT_NAME_KEY, PROMPT_VERSION_KEY
 
 
 __all__ = ["build_messages"]
@@ -403,8 +404,8 @@ def build_messages(
     ]  # docstring: messages 列表
 
     return {
-        "prompt_name": name,
-        "prompt_version": version,
+        PROMPT_NAME_KEY: name,
+        PROMPT_VERSION_KEY: version,
         "query": normalized_query,
         "messages": messages,
         "evidence": evidence_items,

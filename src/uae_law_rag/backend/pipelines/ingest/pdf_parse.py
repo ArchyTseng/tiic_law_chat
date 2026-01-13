@@ -12,6 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict
 
+from uae_law_rag.backend.utils.constants import META_KEY
+
 
 def _load_pymupdf4llm() -> Any:
     """
@@ -120,7 +122,7 @@ async def parse_pdf(*, pdf_path: str, parser_name: str = "pymupdf4llm", parse_ve
     return {
         "markdown": markdown,
         "pages": pages,
-        "meta": meta,
+        META_KEY: meta,
     }  # docstring: 标准化解析结果（供 segment 使用）
 
 

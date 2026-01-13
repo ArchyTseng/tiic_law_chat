@@ -26,6 +26,12 @@ from uae_law_rag.backend.schemas.retrieval import (
     RetrievalRecord,
     RerankStrategy,
 )
+from uae_law_rag.backend.utils.constants import (
+    MESSAGE_ID_KEY,
+    PROVIDER_SNAPSHOT_KEY,
+    TIMING_MS_KEY,
+    TIMING_TOTAL_KEY,
+)
 
 from . import fusion as fusion_mod
 from . import keyword as keyword_mod
@@ -192,7 +198,7 @@ def _timing_snapshot(ctx: PipelineContext) -> Dict[str, float]:
     [上游关系] run_retrieval_pipeline 调用。
     [下游关系] RetrievalRecord.timing_ms。
     """
-    return ctx.timing.to_dict(include_total=True, total_key="total")  # docstring: total 使用一致 key
+    return ctx.timing.to_dict(include_total=True, total_key=TIMING_TOTAL_KEY)  # docstring: total 使用一致 key
 
 
 async def run_retrieval_pipeline(
@@ -339,7 +345,7 @@ async def run_retrieval_pipeline(
     )  # docstring: provider 快照
 
     record_params = {
-        "message_id": message_id,
+        MESSAGE_ID_KEY: message_id,
         "kb_id": kb_id,
         "query_text": query_text,
         "keyword_top_k": cfg.keyword_top_k,
@@ -348,8 +354,8 @@ async def run_retrieval_pipeline(
         "rerank_top_k": cfg.rerank_top_k,
         "fusion_strategy": effective_fusion_strategy,
         "rerank_strategy": effective_rerank_strategy,
-        "provider_snapshot": provider_snapshot,
-        "timing_ms": _timing_snapshot(ctx),
+        PROVIDER_SNAPSHOT_KEY: provider_snapshot,
+        TIMING_MS_KEY: _timing_snapshot(ctx),
     }  # docstring: RetrievalRecord 参数快照
 
     retrieval_record_id, _hit_count = await persist_mod.persist_retrieval(
@@ -370,7 +376,7 @@ async def run_retrieval_pipeline(
         fusion_strategy=cast(FusionStrategy, effective_fusion_strategy),
         rerank_strategy=cast(RerankStrategy, effective_rerank_strategy),
         provider_snapshot=provider_snapshot,
-        timing_ms=record_params["timing_ms"],
+        timing_ms=record_params[TIMING_MS_KEY],
     )  # docstring: 构造 RetrievalRecord schema
 
     hits_schema = [

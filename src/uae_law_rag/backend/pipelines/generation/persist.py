@@ -13,6 +13,13 @@ from typing import Any, Dict, Mapping, Optional, Sequence, List
 
 from uae_law_rag.backend.db.repo.generation_repo import GenerationRepo
 from uae_law_rag.backend.schemas.generation import Citation, CitationsPayload
+from uae_law_rag.backend.utils.constants import (
+    MESSAGE_ID_KEY,
+    META_KEY,
+    PROMPT_NAME_KEY,
+    PROMPT_VERSION_KEY,
+    RETRIEVAL_RECORD_ID_KEY,
+)
 
 
 __all__ = ["persist_generation"]
@@ -136,7 +143,12 @@ def _normalize_citations(citations: Any) -> Dict[str, Any]:
             return dict(citations)  # docstring: 已是 payload 结构
         item = _citation_item_from_any(citations)  # docstring: 单条 citation
         if item:
-            return {"version": "v1", "nodes": [item["node_id"]], "items": [item], "meta": {}}  # docstring: 包装单条
+            return {
+                "version": "v1",
+                "nodes": [item["node_id"]],
+                "items": [item],
+                META_KEY: {},
+            }  # docstring: 包装单条
         return {}  # docstring: 无有效 citation
 
     if isinstance(citations, Sequence) and not isinstance(citations, (str, bytes)):
@@ -155,7 +167,12 @@ def _normalize_citations(citations: Any) -> Dict[str, Any]:
             nodes.append(node_id)  # docstring: 收集 node_id
         if not items:
             return {}  # docstring: 无有效 citations 返回空
-        return {"version": "v1", "nodes": nodes, "items": items, "meta": {}}  # docstring: payload 组装
+        return {
+            "version": "v1",
+            "nodes": nodes,
+            "items": items,
+            META_KEY: {},
+        }  # docstring: payload 组装
 
     return {}  # docstring: 未识别类型回退
 
@@ -168,9 +185,9 @@ def _normalize_record_params(record_params: Mapping[str, Any]) -> Dict[str, Any]
     [下游关系] GenerationRepo.create_record。
     """
     required = [
-        "message_id",
-        "retrieval_record_id",
-        "prompt_name",
+        MESSAGE_ID_KEY,
+        RETRIEVAL_RECORD_ID_KEY,
+        PROMPT_NAME_KEY,
         "model_provider",
         "model_name",
         "output_raw",
@@ -186,16 +203,16 @@ def _normalize_record_params(record_params: Mapping[str, Any]) -> Dict[str, Any]
         return val
 
     params: Dict[str, Any] = {
-        "message_id": _require_nonempty("message_id"),  # docstring: 归属 message
-        "retrieval_record_id": _require_nonempty("retrieval_record_id"),  # docstring: 归属检索记录
-        "prompt_name": _require_nonempty("prompt_name"),  # docstring: prompt 名称
+        MESSAGE_ID_KEY: _require_nonempty(MESSAGE_ID_KEY),  # docstring: 归属 message
+        RETRIEVAL_RECORD_ID_KEY: _require_nonempty(RETRIEVAL_RECORD_ID_KEY),  # docstring: 归属检索记录
+        PROMPT_NAME_KEY: _require_nonempty(PROMPT_NAME_KEY),  # docstring: prompt 名称
         "model_provider": _require_nonempty("model_provider"),  # docstring: provider
         "model_name": _require_nonempty("model_name"),  # docstring: 模型名
         "output_raw": _require_nonempty("output_raw"),  # docstring: 原始输出
         "messages_snapshot": _json_safe(record_params.get("messages_snapshot") or {}),  # docstring: messages 快照
         "output_structured": _json_safe(record_params.get("output_structured")),  # docstring: 结构化输出
         "citations": _normalize_citations(record_params.get("citations")),  # docstring: citations 结构
-        "prompt_version": record_params.get("prompt_version"),  # docstring: prompt 版本
+        PROMPT_VERSION_KEY: record_params.get(PROMPT_VERSION_KEY),  # docstring: prompt 版本
         "status": _coerce_str(record_params.get("status") or "success") or "success",  # docstring: 状态
         "error_message": record_params.get("error_message"),  # docstring: 错误信息
     }

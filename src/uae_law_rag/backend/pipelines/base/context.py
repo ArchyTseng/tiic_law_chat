@@ -20,6 +20,7 @@ from uae_law_rag.backend.db.repo.ingest_repo import IngestRepo
 from uae_law_rag.backend.db.repo.retrieval_repo import RetrievalRepo
 from uae_law_rag.backend.db.repo.generation_repo import GenerationRepo
 from uae_law_rag.backend.db.repo.evaluator_repo import EvaluatorRepo
+from uae_law_rag.backend.utils.constants import TIMING_TOTAL_MS_KEY
 
 from .timing import TimingCollector
 
@@ -115,7 +116,7 @@ class PipelineContext:
             meta=meta or {},
         )
 
-    def timing_ms(self, *, include_total: bool = True, total_key: str = "total_ms") -> Dict[str, float]:
+    def timing_ms(self, *, include_total: bool = True, total_key: str = TIMING_TOTAL_MS_KEY) -> Dict[str, float]:
         """
         [职责] 导出 timing_ms（JSON dict）供 DB 落库或返回结果使用。
         [边界] 不做字段映射；key 与 TimingCollector 保持一致。

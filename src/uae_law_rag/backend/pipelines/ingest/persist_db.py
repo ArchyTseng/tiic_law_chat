@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from uae_law_rag.backend.db.models.doc import DocumentModel, KnowledgeFileModel, NodeModel, NodeVectorMapModel
 from uae_law_rag.backend.db.repo.ingest_repo import IngestRepo
+from uae_law_rag.backend.utils.constants import META_DATA_KEY
 
 
 def _normalize_node_payloads(nodes: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -38,7 +39,7 @@ def _normalize_node_payloads(nodes: Sequence[Dict[str, Any]]) -> List[Dict[str, 
                 "section_path": n.get("section_path"),
                 "start_offset": n.get("start_offset"),
                 "end_offset": n.get("end_offset"),
-                "meta_data": n.get("meta_data") or {},
+                META_DATA_KEY: n.get(META_DATA_KEY) or {},
             }
         )
 
@@ -80,7 +81,7 @@ def _normalize_maps(maps: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
             {
                 "node_id": node_id,
                 "vector_id": vector_id,
-                "meta_data": m.get("meta_data") or {},
+                META_DATA_KEY: m.get(META_DATA_KEY) or {},
             }
         )
     return normalized

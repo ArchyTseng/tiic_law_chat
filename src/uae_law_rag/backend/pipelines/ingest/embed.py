@@ -14,6 +14,8 @@ import inspect
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from uae_law_rag.backend.utils.constants import META_DATA_KEY
+
 
 @dataclass(frozen=True)
 class EmbeddingResult:
@@ -326,7 +328,7 @@ async def embed_nodes(
 
     texts_norm: List[str] = [str(n.get("text") or "") for n in nodes]  # docstring: 提取节点文本
     non_empty_idx: List[int] = [i for i, t in enumerate(texts_norm) if t.strip()]
-    metadatas = [dict(n.get("meta_data") or {}) for n in nodes]  # docstring: 透传 metadata
+    metadatas = [dict(n.get(META_DATA_KEY) or {}) for n in nodes]  # docstring: 透传 metadata
 
     embedder = _resolve_embedder(
         provider=provider, model=model, dim=dim, embed_config=embed_config

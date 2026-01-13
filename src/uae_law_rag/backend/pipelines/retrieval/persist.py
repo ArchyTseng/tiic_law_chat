@@ -13,6 +13,7 @@ from typing import Any, Dict, Mapping, Sequence, Tuple
 
 from uae_law_rag.backend.db.repo.retrieval_repo import RetrievalRepo
 from uae_law_rag.backend.pipelines.retrieval.types import Candidate, _coerce_int
+from uae_law_rag.backend.utils.constants import MESSAGE_ID_KEY, PROVIDER_SNAPSHOT_KEY, TIMING_MS_KEY
 
 
 _STAGE_TO_SOURCE = {
@@ -76,7 +77,7 @@ def _normalize_record_params(record_params: Mapping[str, Any]) -> Dict[str, Any]
     [下游关系] RetrievalRepo.create_record。
     """
     required = [
-        "message_id",
+        MESSAGE_ID_KEY,
         "kb_id",
         "query_text",
         "keyword_top_k",
@@ -97,7 +98,7 @@ def _normalize_record_params(record_params: Mapping[str, Any]) -> Dict[str, Any]
         return v
 
     params: Dict[str, Any] = {
-        "message_id": _require_nonempty("message_id"),  # docstring: 归属 message
+        MESSAGE_ID_KEY: _require_nonempty(MESSAGE_ID_KEY),  # docstring: 归属 message
         "kb_id": _require_nonempty("kb_id"),  # docstring: 归属 KB
         "query_text": _require_nonempty("query_text"),  # docstring: 检索 query
         "keyword_top_k": int(record_params["keyword_top_k"]),  # docstring: keyword top_k
@@ -106,8 +107,8 @@ def _normalize_record_params(record_params: Mapping[str, Any]) -> Dict[str, Any]
         "rerank_top_k": int(record_params["rerank_top_k"]),  # docstring: rerank top_k
         "fusion_strategy": _require_nonempty("fusion_strategy"),  # docstring: 融合策略
         "rerank_strategy": _require_nonempty("rerank_strategy"),  # docstring: rerank 策略
-        "provider_snapshot": record_params.get("provider_snapshot") or {},  # docstring: provider 快照
-        "timing_ms": record_params.get("timing_ms") or {},  # docstring: timing 快照
+        PROVIDER_SNAPSHOT_KEY: record_params.get(PROVIDER_SNAPSHOT_KEY) or {},  # docstring: provider 快照
+        TIMING_MS_KEY: record_params.get(TIMING_MS_KEY) or {},  # docstring: timing 快照
     }
     return params
 

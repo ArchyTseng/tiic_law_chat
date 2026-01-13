@@ -14,6 +14,8 @@ import inspect
 import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from uae_law_rag.backend.utils.constants import META_DATA_KEY
+
 
 def _load_llama_index() -> Dict[str, Any]:
     """
@@ -384,7 +386,7 @@ def _build_payloads(
                 "section_path": section_path,
                 "start_offset": start,
                 "end_offset": end,
-                "meta_data": meta_out,
+                META_DATA_KEY: meta_out,
             }
         )
     return payloads

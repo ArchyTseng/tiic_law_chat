@@ -31,6 +31,21 @@ from uae_law_rag.backend.schemas.ids import (
     UUIDStr,
 )
 from uae_law_rag.backend.schemas.retrieval import RetrievalHit, RetrievalRecord
+from uae_law_rag.backend.utils.constants import (
+    CONVERSATION_ID_KEY,
+    GENERATION_RECORD_ID_KEY,
+    MESSAGE_ID_KEY,
+    META_KEY,
+    PARENT_REQUEST_ID_KEY,
+    PROVIDER_SNAPSHOT_KEY,
+    REQUEST_ID_KEY,
+    RETRIEVAL_RECORD_ID_KEY,
+    TIMING_MS_KEY,
+    TIMING_TOTAL_KEY,
+    TRACE_ID_KEY,
+    TRACE_KEY,
+    TRACE_TAGS_KEY,
+)
 
 from . import checks as checks_mod
 from . import persist as persist_mod
@@ -337,23 +352,23 @@ def _build_meta(ctx: PipelineContext) -> Dict[str, Any]:
     [下游关系] EvaluationRecord.meta 落库。
     """
     meta: Dict[str, Any] = {
-        "trace_id": str(ctx.trace_id),
-        "request_id": str(ctx.request_id),
-        "parent_request_id": str(ctx.parent_request_id) if ctx.parent_request_id else None,
-        "timing_ms": ctx.timing.to_dict(include_total=True, total_key="total"),
+        TRACE_ID_KEY: str(ctx.trace_id),
+        REQUEST_ID_KEY: str(ctx.request_id),
+        PARENT_REQUEST_ID_KEY: str(ctx.parent_request_id) if ctx.parent_request_id else None,
+        TIMING_MS_KEY: ctx.timing.to_dict(include_total=True, total_key=TIMING_TOTAL_KEY),
     }  # docstring: 基础 meta 快照
     if ctx.trace_tags:
-        meta["trace_tags"] = dict(ctx.trace_tags)  # docstring: trace tags
+        meta[TRACE_TAGS_KEY] = dict(ctx.trace_tags)  # docstring: trace tags
     if ctx.provider_snapshot:
-        meta["provider_snapshot"] = dict(ctx.provider_snapshot)  # docstring: provider 快照
+        meta[PROVIDER_SNAPSHOT_KEY] = dict(ctx.provider_snapshot)  # docstring: provider 快照
 
     trace_ctx = ctx.as_trace_context()  # docstring: trace context
     if hasattr(trace_ctx, "model_dump"):
-        meta["trace"] = trace_ctx.model_dump()  # type: ignore[attr-defined]  # docstring: 兼容 pydantic v2
+        meta[TRACE_KEY] = trace_ctx.model_dump()  # type: ignore[attr-defined]  # docstring: 兼容 pydantic v2
     elif hasattr(trace_ctx, "dict"):
-        meta["trace"] = trace_ctx.dict()  # type: ignore[call-arg]  # docstring: 兼容 pydantic v1
+        meta[TRACE_KEY] = trace_ctx.dict()  # type: ignore[call-arg]  # docstring: 兼容 pydantic v1
     else:
-        meta["trace"] = str(trace_ctx)  # docstring: 兜底为字符串
+        meta[TRACE_KEY] = str(trace_ctx)  # docstring: 兜底为字符串
     return meta
 
 
@@ -373,7 +388,7 @@ async def run_evaluator_pipeline(
     if input is None:
         raise ValueError("input is required")  # docstring: 必填且不可为空
 
-    conversation_id = _coerce_str(input.get("conversation_id"))  # docstring: conversation_id
+    conversation_id = _coerce_str(input.get(CONVERSATION_ID_KEY))  # docstring: conversation_id
     if not conversation_id:
         raise ValueError("conversation_id is required")  # docstring: 必填且不可为空
 
@@ -382,7 +397,7 @@ async def run_evaluator_pipeline(
         raise ValueError("retrieval_record is required")  # docstring: 必填且不可为空
 
     message_id = _coerce_str(
-        input.get("message_id") or _read_field(retrieval_record, "message_id")
+        input.get(MESSAGE_ID_KEY) or _read_field(retrieval_record, MESSAGE_ID_KEY)
     )  # docstring: message_id
     if not message_id:
         raise ValueError("message_id is required")  # docstring: 必填且不可为空
@@ -404,8 +419,8 @@ async def run_evaluator_pipeline(
     ctx.timing.reset()  # docstring: 清理上次 timing
 
     evaluator_input: Dict[str, Any] = {
-        "conversation_id": conversation_id,
-        "message_id": message_id,
+        CONVERSATION_ID_KEY: conversation_id,
+        MESSAGE_ID_KEY: message_id,
         "retrieval_record": retrieval_record,
         "retrieval_hits": retrieval_hits,
         "generation_record": generation_record,
@@ -427,17 +442,17 @@ async def run_evaluator_pipeline(
     meta = _build_meta(ctx)  # docstring: meta 快照
 
     record_params = {
-        "conversation_id": conversation_id,
-        "message_id": message_id,
-        "retrieval_record_id": retrieval_record_id,
-        "generation_record_id": generation_record_id,
+        CONVERSATION_ID_KEY: conversation_id,
+        MESSAGE_ID_KEY: message_id,
+        RETRIEVAL_RECORD_ID_KEY: retrieval_record_id,
+        GENERATION_RECORD_ID_KEY: generation_record_id,
         "status": status,
         "rule_version": cfg.rule_version,
         "config": cfg,
         "checks": checks,
         "scores": scores,
         "error_message": error_message,
-        "meta": meta,
+        META_KEY: meta,
     }  # docstring: EvaluationRecord 参数快照
 
     evaluation_record_id = await persist_mod.persist_evaluation(

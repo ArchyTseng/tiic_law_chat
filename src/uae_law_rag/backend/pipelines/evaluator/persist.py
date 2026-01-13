@@ -13,6 +13,13 @@ from typing import Any, Dict, Mapping, Optional, Sequence, get_args
 
 from uae_law_rag.backend.db.repo.evaluator_repo import EvaluatorRepo
 from uae_law_rag.backend.schemas.evaluator import EvaluationStatus
+from uae_law_rag.backend.utils.constants import (
+    CONVERSATION_ID_KEY,
+    GENERATION_RECORD_ID_KEY,
+    MESSAGE_ID_KEY,
+    META_KEY,
+    RETRIEVAL_RECORD_ID_KEY,
+)
 
 
 _ALLOWED_STATUS = set(get_args(EvaluationStatus))  # docstring: 允许的 EvaluationStatus
@@ -104,9 +111,9 @@ def _normalize_record_params(record_params: Mapping[str, Any]) -> Dict[str, Any]
     [下游关系] EvaluatorRepo.create 写入。
     """
     required = [
-        "conversation_id",
-        "message_id",
-        "retrieval_record_id",
+        CONVERSATION_ID_KEY,
+        MESSAGE_ID_KEY,
+        RETRIEVAL_RECORD_ID_KEY,
         "status",
         "config",
         "checks",
@@ -142,17 +149,17 @@ def _normalize_record_params(record_params: Mapping[str, Any]) -> Dict[str, Any]
     if not isinstance(scores_safe, Mapping):
         scores_safe = {}  # docstring: scores 非 dict 回退
 
-    meta_raw = record_params.get("meta") or {}  # docstring: 原始 meta
+    meta_raw = record_params.get(META_KEY) or {}  # docstring: 原始 meta
     meta_safe = _json_safe(meta_raw)  # docstring: meta JSON-safe
     if not isinstance(meta_safe, Mapping):
         meta_safe = {}  # docstring: meta 非 dict 回退
 
     return {
-        "conversation_id": _require_nonempty("conversation_id"),  # docstring: 归属会话
-        "message_id": _require_nonempty("message_id"),  # docstring: 归属消息
-        "retrieval_record_id": _require_nonempty("retrieval_record_id"),  # docstring: 检索记录 ID
-        "generation_record_id": _coerce_optional_str(
-            record_params.get("generation_record_id")
+        CONVERSATION_ID_KEY: _require_nonempty(CONVERSATION_ID_KEY),  # docstring: 归属会话
+        MESSAGE_ID_KEY: _require_nonempty(MESSAGE_ID_KEY),  # docstring: 归属消息
+        RETRIEVAL_RECORD_ID_KEY: _require_nonempty(RETRIEVAL_RECORD_ID_KEY),  # docstring: 检索记录 ID
+        GENERATION_RECORD_ID_KEY: _coerce_optional_str(
+            record_params.get(GENERATION_RECORD_ID_KEY)
         ),  # docstring: 生成记录 ID
         "status": status,  # docstring: 评估状态（已归一化与校验）
         "rule_version": rule_version,  # docstring: 规则版本
@@ -160,7 +167,7 @@ def _normalize_record_params(record_params: Mapping[str, Any]) -> Dict[str, Any]
         "checks": _normalize_checks(record_params.get("checks")),  # docstring: 检查明细快照
         "scores": dict(scores_safe),  # docstring: 分数快照
         "error_message": _coerce_optional_str(record_params.get("error_message")),  # docstring: 错误信息
-        "meta": dict(meta_safe),  # docstring: 扩展元信息
+        META_KEY: dict(meta_safe),  # docstring: 扩展元信息
     }
 
 
