@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Iterable, List, Mapping, Optional, Sequence, TypedDict
 
 from uae_law_rag.backend.schemas.evaluator import CheckStatus, EvaluatorConfig, EvaluationCheck
@@ -160,7 +161,21 @@ def _extract_answer(input: Mapping[str, Any]) -> str:
 
     record = input.get("generation_record")  # docstring: fallback 到 generation_record
     raw = _read_field(record, "output_raw")  # docstring: record.output_raw
-    return _coerce_str(raw)  # docstring: raw 转为字符串
+    raw_text = _coerce_str(raw)  # docstring: raw 转为字符串
+    if not raw_text:
+        return ""  # docstring: 空 raw 回退空
+    # docstring: output_raw 常见为 JSON 字符串；优先解析 answer，避免 gate 误判通过
+    if raw_text.lstrip().startswith("{"):
+        try:
+            data = json.loads(raw_text)
+        except Exception:
+            return ""  # docstring: 解析失败视为无 answer
+        if isinstance(data, dict):
+            val = data.get("answer")
+            if isinstance(val, str) and val.strip():
+                return val.strip()  # docstring: JSON.answer
+            return ""  # docstring: JSON 但无有效 answer
+    return raw_text  # docstring: 非 JSON 文本回退原文
 
 
 def _extract_citations_raw(input: Mapping[str, Any]) -> Any:
@@ -399,6 +414,13 @@ def check_citation_coverage(*, input: EvaluatorInput) -> EvaluationCheck:
     matched = [cid for cid in citations if cid in hit_node_ids]  # docstring: 匹配 citations
     coverage = float(len(matched)) / float(len(citations))  # docstring: coverage 计算
     threshold = float(cfg.citation_coverage_threshold)  # docstring: 覆盖率阈值
+
+    # docstring: 阈值收敛到 [0,1]，避免异常配置导致永远 pass/fail
+    if threshold < 0.0:
+        threshold = 0.0
+    elif threshold > 1.0:
+        threshold = 1.0
+
     ok = coverage >= threshold  # docstring: 是否达标
     status: CheckStatus = "pass" if ok else "fail"  # docstring: 状态判定
     message = "citation coverage ok" if ok else "citation coverage below threshold"  # docstring: 消息
