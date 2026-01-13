@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from .logging_ import TRACE_FIELD_KEYS as LOG_TRACE_FIELD_KEYS  # docstring: SSOT 复用，避免 trace 字段集合漂移
+
 
 DEFAULT_PROMPT_NAME = "uae_law_grounded"  # docstring: 默认 prompt 名称
 DEFAULT_PROMPT_VERSION = "v1"  # docstring: 默认 prompt 版本
@@ -28,21 +30,12 @@ EVALUATION_RECORD_ID_KEY = "evaluation_record_id"  # docstring: evaluation_recor
 TRACE_TAGS_KEY = "trace_tags"  # docstring: trace tags 字段
 TRACE_KEY = "trace"  # docstring: trace 快照字段
 
-TRACE_FIELD_KEYS = (  # docstring: 结构化日志推荐字段集合
-    TRACE_ID_KEY,
-    REQUEST_ID_KEY,
-    PARENT_REQUEST_ID_KEY,
-    CONVERSATION_ID_KEY,
-    MESSAGE_ID_KEY,
-    RETRIEVAL_RECORD_ID_KEY,
-    GENERATION_RECORD_ID_KEY,
-    EVALUATION_RECORD_ID_KEY,
-)
+TRACE_FIELD_KEYS = LOG_TRACE_FIELD_KEYS  # docstring: 统一从 logging_ 复用，避免重复维护
 
 PROVIDER_SNAPSHOT_KEY = "provider_snapshot"  # docstring: provider 快照字段
 TIMING_MS_KEY = "timing_ms"  # docstring: timing_ms 字段
-TIMING_TOTAL_KEY = "total"  # docstring: timing_ms 的总耗时 key（短形式）
-TIMING_TOTAL_MS_KEY = "total_ms"  # docstring: timing_ms 的总耗时 key（含单位）
+TIMING_TOTAL_KEY = "total"  # docstring: timing_ms 的总耗时 key（兼容/短形式；规范输出优先使用 total_ms）
+TIMING_TOTAL_MS_KEY = "total_ms"  # docstring: timing_ms 的总耗时规范 key（含单位）
 
 DEBUG_KEY = "debug"  # docstring: debug 输出字段
 RECORDS_KEY = "records"  # docstring: debug.records 字段
@@ -51,9 +44,11 @@ ERROR_KEY = "error"  # docstring: ErrorResponse 顶层字段
 ERROR_CODE_KEY = "code"  # docstring: ErrorResponse.error.code 字段
 ERROR_MESSAGE_KEY = "message"  # docstring: ErrorResponse.error.message 字段
 ERROR_DETAIL_KEY = "detail"  # docstring: ErrorResponse.error.detail 字段
+ERROR_TRACE_ID_KEY = "trace_id"  # docstring: ErrorResponse.error.trace_id 字段（api/errors.py 注入）
+
 
 META_KEY = "meta"  # docstring: 通用 meta 字段
-META_DATA_KEY = "meta_data"  # docstring: 通用 meta_data 字段
+META_DATA_KEY = "meta_data"  # docstring: 通用 meta_data 字段（如无历史兼容需求，优先统一使用 meta）
 
 DEFAULT_EVAL_RULE_VERSION = "v0"  # docstring: evaluator 规则版本默认值
 DEFAULT_EVAL_RETRIEVAL_TOPK = 10  # docstring: evaluator retrieval_topk 默认值
