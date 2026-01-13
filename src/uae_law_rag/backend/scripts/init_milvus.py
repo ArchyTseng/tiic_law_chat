@@ -41,6 +41,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--drop", action="store_true")  # docstring: 先 drop 再 create
     parser.add_argument("--skip-existing", action="store_true")  # docstring: 已存在时直接跳过
     parser.add_argument("--skip-load", action="store_true")  # docstring: 跳过 load collection
+    parser.add_argument("--force-reconnect", action="store_true")  # docstring: 同进程强制断开并重连 Milvus alias
     parser.add_argument("--json", action="store_true")  # docstring: 仅输出 JSON 结果
     return parser
 
@@ -54,6 +55,21 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     """
     parser = _build_parser()  # docstring: 构造 parser
     return parser.parse_args(list(argv) if argv is not None else None)
+
+
+def _coerce_enum(value: Any, enum_cls: Any, *, name: str) -> Any:
+    """
+    [职责] 将 CLI 的字符串参数转换为项目定义的 Enum（IndexType/MetricType）。
+    [边界] 非法值直接抛 ValueError；不做容错替换。
+    [上游关系] main 调用。
+    [下游关系] _run_async/build_collection_spec 使用强类型枚举。
+    """
+    if isinstance(value, enum_cls):
+        return value
+    try:
+        return enum_cls(value)
+    except Exception as exc:
+        raise ValueError(f"invalid {name}: {value}") from exc
 
 
 def _normalize_int(value: int, *, name: str, minimum: int = 1) -> int:
@@ -80,6 +96,7 @@ async def _run_async(
     drop: bool,
     skip_existing: bool,
     skip_load: bool,
+    force_reconnect: bool,
 ) -> Dict[str, Any]:
     """
     [职责] 执行 Milvus 初始化主流程（healthcheck / create / index / load）。
@@ -88,7 +105,9 @@ async def _run_async(
     [下游关系] _print_summary 输出结果。
     """
     start_ms = time.perf_counter() * 1000.0  # docstring: 记录开始时间
-    client = MilvusClient.from_env()  # docstring: 从环境变量建立连接
+    client = MilvusClient.from_env(
+        force_reconnect=bool(force_reconnect)
+    )  # docstring: 从环境变量建立连接（可选强制重连）
     index_manager = MilvusIndexManager(client)  # docstring: 索引管理器
     name = str(collection or "").strip()  # docstring: collection 名称归一化
     if not name:
@@ -98,10 +117,11 @@ async def _run_async(
         "ok": True,
         "collection": name,
         "embed_dim": int(embed_dim),
-        "metric_type": str(metric_type),
-        "index_type": str(index_type),
+        "metric_type": getattr(metric_type, "value", str(metric_type)),
+        "index_type": getattr(index_type, "value", str(index_type)),
         "top_k": int(top_k),
         "description": str(description or ""),
+        "force_reconnect": bool(force_reconnect),
         "existed": False,
         "dropped": False,
         "created": False,
@@ -132,8 +152,12 @@ async def _run_async(
             default_top_k=_normalize_int(top_k, name="top_k"),
             description=description,
         )  # docstring: 构造 collection spec
-        await client.create_collection(spec, drop_if_exists=False)  # docstring: 创建 collection（幂等）
-        result["created"] = (not existed) or drop  # docstring: 标记是否真正创建/重建
+        # docstring: 幂等策略：仅在不存在或 drop 后才执行 create，避免依赖 client 侧“存在即 no-op”的不透明行为
+        if (not existed) or drop:
+            await client.create_collection(spec, drop_if_exists=False)  # docstring: 创建 collection
+            result["created"] = True  # docstring: 标记创建/重建完成
+        else:
+            result["created"] = False  # docstring: 已存在且未 drop，不执行 create
 
         await index_manager.ensure_index(spec)  # docstring: 确保索引存在
         result["index_ensured"] = True  # docstring: 标记索引完成
@@ -145,6 +169,7 @@ async def _run_async(
         result["ok"] = False  # docstring: 标记失败
         result["error"] = f"{exc.__class__.__name__}: {exc}"  # docstring: 记录异常信息
     finally:
+        client.disconnect()  # docstring: best-effort 释放连接别名
         result["duration_ms"] = round(time.perf_counter() * 1000.0 - start_ms, 2)  # docstring: 计算耗时
     return result
 
@@ -188,13 +213,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             _run_async(
                 collection=args.collection,
                 embed_dim=args.embed_dim,
-                metric_type=args.metric_type,
-                index_type=args.index_type,
+                metric_type=_coerce_enum(args.metric_type, MetricType, name="metric_type"),
+                index_type=_coerce_enum(args.index_type, IndexType, name="index_type"),
                 top_k=args.top_k,
                 description=args.description,
                 drop=bool(args.drop),
                 skip_existing=bool(args.skip_existing),
                 skip_load=bool(args.skip_load),
+                force_reconnect=bool(args.force_reconnect),
             )
         )  # docstring: 执行主流程
         _print_summary(result=result, as_json=bool(args.json))  # docstring: 输出摘要/JSON
@@ -208,6 +234,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "index_type": args.index_type,
             "top_k": args.top_k,
             "description": args.description,
+            "force_reconnect": bool(args.force_reconnect),
             "existed": False,
             "dropped": bool(args.drop),
             "created": False,

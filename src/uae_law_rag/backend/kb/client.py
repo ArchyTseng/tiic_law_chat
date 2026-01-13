@@ -38,12 +38,26 @@ class MilvusClient:
     def __init__(self, *, alias: str = "default") -> None:
         self._alias = alias  # docstring: pymilvus 连接别名（支持多连接场景）
 
+    def disconnect(self) -> None:
+        """
+        Disconnect current alias (best-effort).
+
+        Notes:
+          - pymilvus connections are global within the process.
+          - This is mainly used by CLI scripts / tests to release alias between runs.
+        """  # docstring: 脚本/测试收尾释放连接，避免同进程重复运行别名残留
+        try:
+            connections.disconnect(alias=self._alias)
+        except Exception:
+            # docstring: best-effort；disconnect 失败不影响主流程
+            pass
+
     # ------------------------------------------------------------------
     # Connection
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_env(cls) -> "MilvusClient":
+    def from_env(cls, *, force_reconnect: bool = False) -> "MilvusClient":
         """
         Create client from environment variables.
 
@@ -54,6 +68,20 @@ class MilvusClient:
         uri = os.getenv("MILVUS_URI")
         host = os.getenv("MILVUS_HOST")
         port = os.getenv("MILVUS_PORT")
+
+        # docstring: 同进程幂等复用：若 alias 已存在连接则直接复用；force_reconnect=True 时强制断开再重连
+        try:
+            if hasattr(connections, "has_connection") and connections.has_connection(alias="default"):
+                if force_reconnect:
+                    try:
+                        connections.disconnect(alias="default")
+                    except Exception:
+                        pass
+                else:
+                    return cls(alias="default")
+        except Exception:
+            # docstring: has_connection 不可用或异常则继续走 connect 流程
+            pass
 
         if uri:
             connections.connect(alias="default", uri=uri)
