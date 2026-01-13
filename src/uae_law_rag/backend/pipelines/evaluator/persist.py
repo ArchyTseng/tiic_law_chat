@@ -9,10 +9,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Dict, Mapping, Optional, Sequence, get_args
 
 from uae_law_rag.backend.db.repo.evaluator_repo import EvaluatorRepo
+from uae_law_rag.backend.schemas.evaluator import EvaluationStatus
 
+
+_ALLOWED_STATUS = set(get_args(EvaluationStatus))  # docstring: 允许的 EvaluationStatus
 
 __all__ = ["persist_evaluation"]
 
@@ -63,7 +66,7 @@ def _json_safe(value: Any) -> Any:
             return _json_safe(value.dict())  # type: ignore[call-arg]  # docstring: 兼容 pydantic v1
         except Exception:
             return None  # docstring: dict 失败兜底
-    return None  # docstring: 无法序列化回退
+    return str(value)  # docstring: 最终兜底为字符串（避免静默丢失）
 
 
 def _normalize_checks(checks: Any) -> Dict[str, Any]:
@@ -77,7 +80,13 @@ def _normalize_checks(checks: Any) -> Dict[str, Any]:
         return {"items": []}  # docstring: 缺失 checks 回退空列表
     if isinstance(checks, Mapping):
         safe = _json_safe(checks)  # docstring: mapping 转 JSON-safe
-        return dict(safe or {})  # docstring: 转为 dict
+        if isinstance(safe, Mapping):
+            safe_dict = dict(safe)
+            # docstring: 若不是标准 {"items":[...]}，则包装为 items 列表以保持结构稳定
+            if "items" not in safe_dict:
+                return {"items": [safe_dict]}
+            return safe_dict
+        return {"items": []}  # docstring: 非 mapping 回退
     if isinstance(checks, Sequence) and not isinstance(checks, (str, bytes, bytearray)):
         items = [_json_safe(item) for item in list(checks)]  # docstring: 序列转为 items
         return {"items": items}  # docstring: 标准化为 items
@@ -124,6 +133,10 @@ def _normalize_record_params(record_params: Mapping[str, Any]) -> Dict[str, Any]
     if not rule_version:
         raise ValueError("record_params empty: rule_version")  # docstring: rule_version 必填
 
+    status = _require_nonempty("status").lower()  # docstring: status 归一化
+    if status not in _ALLOWED_STATUS:
+        raise ValueError(f"record_params invalid: status={status}")  # docstring: status 强约束
+
     scores_raw = record_params.get("scores")  # docstring: 原始 scores
     scores_safe = _json_safe(scores_raw)  # docstring: scores JSON-safe
     if not isinstance(scores_safe, Mapping):
@@ -141,7 +154,7 @@ def _normalize_record_params(record_params: Mapping[str, Any]) -> Dict[str, Any]
         "generation_record_id": _coerce_optional_str(
             record_params.get("generation_record_id")
         ),  # docstring: 生成记录 ID
-        "status": _require_nonempty("status"),  # docstring: 评估状态
+        "status": status,  # docstring: 评估状态（已归一化与校验）
         "rule_version": rule_version,  # docstring: 规则版本
         "config": dict(config_safe),  # docstring: 配置快照
         "checks": _normalize_checks(record_params.get("checks")),  # docstring: 检查明细快照
