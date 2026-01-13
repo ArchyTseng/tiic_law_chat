@@ -322,7 +322,7 @@ def _run_checks(
                     name=name,
                     status=cast(CheckStatus, "fail"),
                     message=msg,
-                    detail={"error": msg},
+                    detail={"error": msg, "exception": exc.__class__.__name__},
                 )
             )  # docstring: 异常转为 fail check
     error_message = "; ".join(errors) if errors else None  # docstring: 汇总错误
@@ -446,11 +446,11 @@ async def run_evaluator_pipeline(
     )  # docstring: 写入评估记录
 
     result = EvaluationResult(
-        id=cast(UUIDStr, UUIDStr(str(evaluation_record_id))),  # docstring: 使用落库 ID
+        id=cast(UUIDStr, UUIDStr(evaluation_record_id)),  # docstring: 使用落库 ID
         status=cast(EvaluationStatus, status),
         message_id=cast(MessageId, UUIDStr(str(message_id))),
         retrieval_record_id=cast(RetrievalRecordId, UUIDStr(str(retrieval_record_id))),
-        generation_record_id=cast(Optional[GenerationRecordId], UUIDStr(str(generation_record_id)))
+        generation_record_id=cast(GenerationRecordId, UUIDStr(str(generation_record_id)))
         if generation_record_id
         else None,
         config=cfg,
