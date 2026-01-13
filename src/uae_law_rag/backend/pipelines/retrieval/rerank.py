@@ -112,7 +112,7 @@ def _build_reranker(
 
     if strategy == "bge_reranker":
         SentenceTransformerRerank = li["SentenceTransformerRerank"]
-        model_name = str(model or "BAAI/bge-reranker-large")  # docstring: 默认模型
+        model_name = str(model or "BAAI/bge-reranker-v2-m3")  # docstring: 默认模型
         kwargs = {"model": model_name, "model_name": model_name, "top_n": int(top_k), **cfg}  # docstring: 参数快照
         reranker = SentenceTransformerRerank(
             **_filter_kwargs(SentenceTransformerRerank.__init__, kwargs)

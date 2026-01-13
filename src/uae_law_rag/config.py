@@ -1,11 +1,42 @@
+# src/uae_law_rag/config.py
+from __future__ import annotations
+
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _find_repo_root(start: Path) -> Path:
+    """
+    Best-effort repository root discovery.
+    - Prefer the closest ancestor containing `pyproject.toml`.
+    - Fallback to filesystem root if not found.
+    """
+    cur = start.resolve()
+    for _ in range(20):
+        if (cur / "pyproject.toml").exists():
+            return cur
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    return start.resolve()
+
+
+PACKAGE_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = _find_repo_root(PACKAGE_ROOT)
+
+# Keep package-local workspace as defaults (dev-friendly),
+# but allow full override via environment variables.
+DATA_ROOT = PACKAGE_ROOT / "raw_data"
 
 
 class Settings(BaseSettings):
     LOCAL_MODELS: bool = True
     DEBUG: bool = True
-    PROJECT_ROOT: str = "/Volumes/Workspace/Projects/RAG/uae_law_rag"
+
+    # Prefer repo root by default; override via .env if needed.
+    PROJECT_ROOT: str = str(REPO_ROOT)
+
+    DATA_RAW_PATH: str = str(DATA_ROOT)
 
     OPENAI_API_KEY: str | None = None
     OPENAI_API_BASE: str | None = "https://api.openai.com/v1"
