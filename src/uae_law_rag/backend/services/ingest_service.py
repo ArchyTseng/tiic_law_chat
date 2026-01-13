@@ -14,7 +14,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 from sqlalchemy.exc import IntegrityError
@@ -168,6 +168,24 @@ def _evaluate_ingest_gate(*, pages: Optional[int], node_count: int, vector_count
     return IngestGateDecision(passed=not reasons, reasons=reasons)
 
 
+def _build_node_payload_index(
+    node_dicts: Sequence[Dict[str, Any]],
+    embeddings: Sequence[Any],
+) -> Dict[int, Tuple[Dict[str, Any], Any]]:
+    """
+    [职责] 基于 node_index 构建 payload+embedding 对齐索引，避免 nodes_out 顺序变化导致错配。
+    [边界] node_index 缺失时回退到输入顺序索引；冲突时以最后一次为准（应由上游保证唯一）。
+    """
+    by_index: Dict[int, Tuple[Dict[str, Any], Any]] = {}
+    for i, payload in enumerate(node_dicts):
+        try:
+            idx = int(payload.get("node_index", i))
+        except Exception:
+            idx = i
+        by_index[idx] = (payload, embeddings[i])
+    return by_index
+
+
 def _build_ingest_response(
     *,
     kb_id: str,
@@ -306,7 +324,8 @@ async def ingest_file(
 
     with ctx.timing.stage("idempotency"):
         existing = await ctx.ingest_repo.get_file_by_sha256(kb_id=kb_id, sha256=sha256)  # docstring: 幂等判定
-    if existing is not None:
+    # docstring: 仅对 success 做短路；failed/pending 允许继续重试以实现可回放与自愈
+    if existing is not None and str(getattr(existing, "ingest_status", "") or "").lower() == INGEST_STATUS_SUCCESS:
         timing_ms = ctx.timing_ms(total_key=TIMING_TOTAL_MS_KEY)  # docstring: 幂等分支 timing
         debug_payload = (
             _build_debug_payload(
@@ -386,7 +405,7 @@ async def ingest_file(
     vector_ids: List[str] = []
     document_id: Optional[str] = None
     parsed_pages: Optional[int] = None
-    milvus_written = False
+    milvus_upsert_done = False
 
     try:
         state = _advance_state(state, STATE_PARSING)  # docstring: 状态推进到 PARSING
@@ -437,6 +456,8 @@ async def ingest_file(
         if len(embeddings) != len(node_dicts):
             raise ValueError("embedding count mismatch")  # docstring: 向量数量必须与节点一致
 
+        by_index = _build_node_payload_index(node_dicts, embeddings)  # docstring: 构建 payload+embedding 对齐索引
+
         state = _advance_state(state, STATE_PERSISTING)  # docstring: 状态推进到 PERSISTING
         current_stage = "persist_db"
         with ctx.timing.stage("db", accumulate=True):
@@ -451,11 +472,16 @@ async def ingest_file(
             )  # docstring: 落库 Document + Nodes
         document_id = str(doc.id)  # docstring: 文档 ID 记录
 
-        nodes_out = sorted(list(nodes_out), key=lambda n: int(getattr(n, "node_index", 0)))  # docstring: 顺序对齐
+        nodes_out = sorted(
+            list(nodes_out), key=lambda n: int(getattr(n, "node_index", 0))
+        )  # docstring: 统一按 node_index 输出顺序
 
         entities: List[Dict[str, Any]] = []
         for i, node in enumerate(nodes_out):
-            payload = node_dicts[i]  # docstring: 通过索引对齐 payload
+            node_index = int(getattr(node, "node_index", i))
+            if node_index not in by_index:
+                raise ValueError("node_index mismatch between persisted nodes and input payloads")
+            payload, embedding = by_index[node_index]  # docstring: 基于 node_index 对齐 payload+embedding
             page = payload.get("page")
             if page is None:
                 page = getattr(node, "page", None)  # docstring: 回退到 DB 节点页码
@@ -467,7 +493,7 @@ async def ingest_file(
             entities.append(
                 {
                     VECTOR_ID_FIELD: vector_id,
-                    EMBEDDING_FIELD: embeddings[i],
+                    EMBEDDING_FIELD: embedding,
                     NODE_ID_FIELD: node.id,
                     KB_ID_FIELD: kb_id,
                     FILE_ID_FIELD: file_id,
@@ -486,7 +512,7 @@ async def ingest_file(
                 entities=entities,
                 embed_dim=embed_dim,
             )  # docstring: 写入 Milvus 向量实体
-        milvus_written = True  # docstring: 标记 Milvus 写入完成
+        milvus_upsert_done = True  # docstring: 标记 Milvus 写入完成
 
         maps = [{"node_id": nodes_out[i].id, "vector_id": vector_ids[i]} for i in range(len(nodes_out))]
         with ctx.timing.stage("db", accumulate=True):
@@ -582,7 +608,7 @@ async def ingest_file(
     except Exception as exc:
         await session.rollback()  # docstring: pipeline 异常回滚
         await _cleanup_milvus(
-            milvus_repo, collection=collection, file_id=file_id, enabled=milvus_written
+            milvus_repo, collection=collection, file_id=file_id, enabled=milvus_upsert_done
         )  # docstring: 清理向量
         await _mark_file_failed(session=session, repo=ctx.ingest_repo, file_id=file_id)  # docstring: 写回 failed
         error = _classify_pipeline_error(exc, stage=current_stage)  # docstring: 异常归类
