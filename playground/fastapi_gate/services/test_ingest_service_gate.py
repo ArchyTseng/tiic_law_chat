@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -228,7 +229,7 @@ async def test_ingest_service_gate_end_to_end(session: AsyncSession) -> None:
         response = await ingest_file(
             session=session,
             kb_id=kb.id,
-            source_uri=pdf_file.resolve().as_uri(),
+            source_uri=str(pdf_file.resolve()),
             file_name=pdf_file.name,
             ingest_profile={"parser": "pymupdf4llm", "parse_version": "v1", "segment_version": "v1"},
             milvus_repo=repo,
@@ -236,18 +237,23 @@ async def test_ingest_service_gate_end_to_end(session: AsyncSession) -> None:
             debug=True,
         )  # docstring: 调用 ingest_service
 
+        assert response.get("kb_id") == kb.id  # docstring: kb_id 必须透传一致
         assert response.get("status") == "success"  # docstring: service 成功状态
         assert response.get("file_id")  # docstring: file_id 必须存在
         assert int(response.get("node_count", 0)) > 0  # docstring: 节点数量必须为正
 
         timing = response.get(TIMING_MS_KEY, {})
         assert TIMING_TOTAL_MS_KEY in timing  # docstring: 必须包含 total_ms
-        assert float(timing[TIMING_TOTAL_MS_KEY]) >= 0.0  # docstring: timing 值合法
+        assert float(timing[TIMING_TOTAL_MS_KEY]) > 0.0  # docstring: timing 值必须为正
 
         assert response.get(TRACE_ID_KEY) == str(trace_context.trace_id)  # docstring: trace_id 透传
         assert response.get(REQUEST_ID_KEY) == str(trace_context.request_id)  # docstring: request_id 透传
 
         debug_payload = response.get(DEBUG_KEY) or {}
+        assert debug_payload.get("state") == "SUCCESS"  # docstring: 成功状态机终态必须为 SUCCESS
+        sha = str(debug_payload.get("sha256") or "")
+        assert re.fullmatch(r"[0-9a-f]{64}", sha) is not None  # docstring: sha256 必须为 64 位 hex
+        assert debug_payload.get("document_id")  # docstring: 成功路径必须产生 document_id 审计锚点
         gate = debug_payload.get("gate") or {}
         assert gate.get("passed") is True  # docstring: gate 必须通过
         assert debug_payload.get("node_ids_count") == response.get("node_count")  # docstring: 节点数量一致
@@ -311,7 +317,7 @@ async def test_ingest_service_gate_end_to_end(session: AsyncSession) -> None:
         response2 = await ingest_file(
             session=session,
             kb_id=kb.id,
-            source_uri=pdf_file.resolve().as_uri(),
+            source_uri=str(pdf_file.resolve()),
             file_name=pdf_file.name,
             ingest_profile={"parser": "pymupdf4llm", "parse_version": "v1", "segment_version": "v1"},
             milvus_repo=repo,
@@ -321,6 +327,11 @@ async def test_ingest_service_gate_end_to_end(session: AsyncSession) -> None:
         assert response2.get("file_id") == response.get("file_id")  # docstring: 幂等 file_id
         assert response2.get("status") == "success"  # docstring: 幂等状态稳定
         assert response2.get("node_count") == response.get("node_count")  # docstring: 幂等统计一致
+
+        # docstring: 幂等短路必须不新增文件记录（sha256 → file 仍指向同一条 success 记录）
+        existing = await ingest_repo.get_file_by_sha256(kb_id=kb.id, sha256=file_row.sha256)
+        assert existing is not None  # docstring: sha256 对应记录必须存在
+        assert str(existing.id) == str(response.get("file_id"))  # docstring: sha256 唯一对应同一 file_id
     finally:
         if idx is not None and spec is not None:
             try:
