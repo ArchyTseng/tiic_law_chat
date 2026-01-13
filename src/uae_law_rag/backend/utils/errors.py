@@ -112,7 +112,9 @@ class DomainError(Exception):
 
         if not is_valid_error_code(error_code) and not allow_nonstandard_code:
             raise ValueError(f"invalid error_code: {error_code}")  # docstring: 防止不规范错误码泄露
-        normalized_detail = detail or {}  # docstring: 归一化 detail，确保 dict
+        normalized_detail = (
+            {} if detail is None else dict(detail)
+        )  # docstring: 归一化 detail（拷贝一次，避免外部后续修改影响审计稳定性）
         ensure_json_safe_detail(normalized_detail)  # docstring: 保证 detail 可序列化
 
         resolved_http_status = (
@@ -144,7 +146,7 @@ class DomainError(Exception):
         return {
             "code": self.error_code,
             "message": self.message,
-            "detail": self.detail,
+            "detail": dict(self.detail),
         }  # docstring: 返回稳定字段集合
 
 
