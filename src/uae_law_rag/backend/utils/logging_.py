@@ -100,7 +100,7 @@ class StructuredLogFormatter(logging.Formatter):
         payload.update(extras)  # docstring: 合并结构化字段
 
         if record.exc_info:
-            payload["exc_info"] = self.formatException(record.exc_info)  # docstring: 异常堆栈文本
+            payload["exception"] = self.formatException(record.exc_info)  # docstring: 格式化后的异常堆栈文本
         if record.stack_info:
             payload["stack_info"] = record.stack_info  # docstring: 显式 stack_info
 
@@ -124,7 +124,10 @@ def configure_logging(
     logger.setLevel(level)  # docstring: 设置 base logger 级别
 
     has_handler = any(
-        isinstance(h, logging.StreamHandler) and getattr(h, "name", "") == "structured_json" for h in logger.handlers
+        isinstance(h, logging.StreamHandler)
+        and getattr(h, "name", "") == "structured_json"
+        and isinstance(getattr(h, "formatter", None), StructuredLogFormatter)
+        for h in logger.handlers
     )
     if not has_handler:
         handler = logging.StreamHandler()
@@ -144,7 +147,15 @@ def get_logger(name: Optional[str] = None, *, level: Optional[int] = None) -> lo
     [上游关系] services/pipelines/api 调用获取 logger。
     [下游关系] logger 输出 JSON 格式结构化日志。
     """
-
+    # docstring: 避免 get_logger 引入强副作用；仅在 base logger 未配置时进行最小配置
+    base_logger = logging.getLogger(DEFAULT_LOGGER_NAME)
+    if not any(
+        isinstance(h, logging.StreamHandler)
+        and getattr(h, "name", "") == "structured_json"
+        and isinstance(getattr(h, "formatter", None), StructuredLogFormatter)
+        for h in base_logger.handlers
+    ):
+        configure_logging()
     configure_logging()  # docstring: 确保 base logger 就绪
     full_name = name or DEFAULT_LOGGER_NAME
     if name and not name.startswith(DEFAULT_LOGGER_NAME):
