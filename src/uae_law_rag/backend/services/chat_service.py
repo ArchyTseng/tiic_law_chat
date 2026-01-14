@@ -4,7 +4,7 @@
 [职责] chat_service：编排对话链路的服务入口（消息创建 + 检索/生成/评估编排 + Gate 裁决）。
 [边界] 不处理 HTTP 语义；不直接调用底层 SDK；仅负责服务层状态机与事务边界。
 [上游关系] api/routers/chat.py 调用 chat(...)；依赖 TraceContext 与 session 注入。
-[下游关系] retrieval/generation/evaluator pipeline 产出审计记录；message/conversation 写回状态供回放。
+[下游关系] retrieval/generation/evaluator 服务产出审计记录；message/conversation 写回状态供回放。
 """
 
 from __future__ import annotations
@@ -117,7 +117,7 @@ class LlmDecision:
     [职责] LlmDecision：记录 LLM 决策结果（provider/model/权限/来源）。
     [边界] 不执行 LLM 调用；仅表达服务层最终决议。
     [上游关系] chat_service 在解析 context/KB 后生成。
-    [下游关系] generation pipeline 使用该决议构建 provider_snapshot。
+    [下游关系] generation service 使用该决议构建 provider_snapshot。
     """
 
     provider: str
@@ -258,7 +258,7 @@ def _check_llm_entitlement(llm: LlmDecision) -> LlmDecision:
     [职责] 执行最小 LLM entitlement 检查（provider allowlist）。
     [边界] 仅做 provider allowlist；不实现计费/配额。
     [上游关系] chat(...) 决策链路调用。
-    [下游关系] 控制是否允许调用 generation pipeline。
+    [下游关系] 控制是否允许调用 generation service。
     """
     allowlist = {
         "ollama",
@@ -294,10 +294,10 @@ def _build_retrieval_config(
     keyword_top_k: int,
 ) -> Dict[str, Any]:
     """
-    [职责] 组装 retrieval pipeline 配置（含 collection 与 top_k）。
+    [职责] 组装 retrieval service 配置（含 collection 与 top_k）。
     [边界] 不做语义校验；仅归一化与透传。
     [上游关系] chat(...) 调用。
-    [下游关系] run_retrieval_pipeline 使用该配置落库。
+    [下游关系] execute_retrieval 使用该配置落库。
     """
     cfg: Dict[str, Any] = {
         "keyword_top_k": int(keyword_top_k),  # docstring: keyword top_k
@@ -388,10 +388,10 @@ def _build_generation_config(
     llm: LlmDecision,
 ) -> Dict[str, Any]:
     """
-    [职责] 组装 generation pipeline 配置（prompt + model + postprocess）。
+    [职责] 组装 generation service 配置（prompt + model + postprocess）。
     [边界] 不校验 prompt/LLM 语义；仅归一化与透传。
     [上游关系] chat(...) 调用。
-    [下游关系] run_generation_pipeline 使用该配置落库。
+    [下游关系] execute_generation 使用该配置落库。
     """
     prompt_name, _ = _resolve_value(
         key="prompt_name",
@@ -466,10 +466,10 @@ def _build_evaluator_config(
     settings: Mapping[str, Any],
 ) -> EvaluatorConfig:
     """
-    [职责] 组装 evaluator pipeline 配置（EvaluatorConfig）。
+    [职责] 组装 evaluator service 配置（EvaluatorConfig）。
     [边界] 配置异常回退默认；不做策略校验。
     [上游关系] chat(...) 调用。
-    [下游关系] run_evaluator_pipeline 使用该配置落库。
+    [下游关系] execute_evaluator 使用该配置落库。
     """
     raw, _ = _resolve_mapping_value(
         keys=("evaluator_config", "evaluator"),
@@ -560,7 +560,7 @@ def _merge_provider_snapshot(*snapshots: Optional[Mapping[str, Any]]) -> Dict[st
 
 def _classify_error(exc: Exception, *, stage: Optional[str]) -> DomainError:
     """
-    [职责] 将异常映射为 DomainError（pipeline/external）。
+    [职责] 将异常映射为 DomainError（stage/external）。
     [边界] 仅依据 stage 做最小分类。
     [上游关系] chat(...) 捕获异常后调用。
     [下游关系] routers/errors.py 映射为 HTTP。
@@ -611,7 +611,7 @@ async def chat(
     debug: bool = False,
 ) -> Dict[str, Any]:
     """
-    [职责] chat：执行 Message 创建 + Retrieval/Generation/Evaluator pipeline，并返回最终裁决。
+    [职责] chat：执行 Message 创建 + Retrieval/Generation/Evaluator 服务，并返回最终裁决。
     [边界] 不做 HTTP 映射；不触碰底层 SDK；仅编排与状态机。
     [上游关系] routers/chat.py 调用；上游提供 session/milvus_repo/trace_context。
     [下游关系] 写入 Message/Retrieval/Generation/Evaluation 记录；返回可映射 JSON-safe 结果。
@@ -623,6 +623,7 @@ async def chat(
     if not query_text:
         raise BadRequestError(message="query is required")  # docstring: query 必填
 
+    # docstring: === preload & decisions ===
     ctx = PipelineContext.from_session(session, trace_context=trace_context)  # docstring: 装配 ctx
     context_dict = _normalize_context(context)  # docstring: context 归一化
 
@@ -742,7 +743,7 @@ async def chat(
         vector_top_k=vector_top_k_record,
         keyword_top_k=keyword_top_k,
     )  # docstring: 构造 retrieval 配置
-    # IMPORTANT: Do NOT inject extra keys into retrieval_config unless the retrieval pipeline schema
+    # IMPORTANT: Do NOT inject extra keys into retrieval_config unless the retrieval service schema
     # explicitly allows them (many schema use extra="forbid").
     # Keep the "vector enabled" semantics in the service layer: allow_vector controls whether we embed
     # and whether we pass query_vector.
@@ -768,7 +769,7 @@ async def chat(
             message=f"model_provider not allowed: {llm_decision.provider}"
         )  # docstring: provider 不在 allowlist
 
-    # Ensure LLM provider snapshot is written BEFORE generation, so generation pipeline can persist it.
+    # Ensure LLM provider snapshot is written BEFORE generation, so generation service can persist it.
     ctx.with_provider(
         "llm",
         {
@@ -793,6 +794,7 @@ async def chat(
         settings=conversation_settings,
     )  # docstring: evaluator 配置
 
+    # docstring: === phase-1 message create & commit ===
     msg = await msg_repo.create_user_message(
         conversation_id=conv_id,
         chat_type=chat_type,
@@ -819,6 +821,7 @@ async def chat(
     current_stage: Optional[str] = None
 
     try:
+        # docstring: === retrieval execute & gate ===
         state = _advance_state(state, STATE_RETRIEVAL_DONE)  # docstring: 状态推进到 RETRIEVAL_DONE
         current_stage = "embed"
         query_vector: Optional[Sequence[float]] = None
@@ -858,6 +861,7 @@ async def chat(
             raise InternalError(message="message not found for status update")  # docstring: message 必须存在
 
         if retrieval_gate is not None and not retrieval_gate.passed:
+            # docstring: === blocked fast-return ===
             msg_row.status = MESSAGE_STATUS_BLOCKED  # docstring: Gate blocked
             msg_row.error_message = "no_evidence"  # docstring: 阻断原因
             msg_row.response = ""  # docstring: blocked 不返回 answer
@@ -913,6 +917,7 @@ async def chat(
                 response[DEBUG_KEY] = debug_payload  # docstring: debug 输出
             return response
 
+        # docstring: === generation execute ===
         state = _advance_state(state, STATE_GENERATION_DONE)  # docstring: 状态推进到 GENERATION_DONE
         current_stage = "generation"
         generation_result = await execute_generation(
@@ -931,6 +936,7 @@ async def chat(
         generation_gate = generation_result.gate  # docstring: generation gate 记录
         await session.commit()  # docstring: 提交 generation 结果（可回放）
 
+        # docstring: === evaluator execute ===
         state = _advance_state(state, STATE_EVALUATION_DONE)  # docstring: 状态推进到 EVALUATION_DONE
         current_stage = "evaluator"
         evaluator_result = await execute_evaluator(
@@ -950,6 +956,7 @@ async def chat(
         evaluator_gate = evaluator_result.gate  # docstring: evaluator gate 记录
         await session.commit()  # docstring: 提交 evaluator 结果（可回放）
 
+        # docstring: === final writeback & response ===
         status = evaluator_result.mapped_message_status  # docstring: 映射最终 status
         answer_text = str(generation_bundle.answer or "").strip()  # docstring: answer 输出
         citations = _extract_generation_citations(generation_bundle)  # docstring: citations 输出
