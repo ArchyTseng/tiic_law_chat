@@ -87,10 +87,13 @@ class TraceContextMiddleware(BaseHTTPMiddleware):
 
         try:
             response = await call_next(request)  # docstring: 执行下游 handler
-        finally:
+        except Exception:
             total_ms = (time.perf_counter() - start_ts) * 1000.0  # docstring: 计算总耗时
             request.state.timing_ms = {TIMING_TOTAL_MS_KEY: total_ms}  # docstring: 写入 timing_ms
+            raise
 
+        total_ms = (time.perf_counter() - start_ts) * 1000.0  # docstring: 计算总耗时
+        request.state.timing_ms = {TIMING_TOTAL_MS_KEY: total_ms}  # docstring: 写入 timing_ms
         response.headers[_TRACE_HEADER] = trace_id  # docstring: 回写 trace_id header
         response.headers[_REQUEST_HEADER] = request_id  # docstring: 回写 request_id header
         return response
