@@ -30,7 +30,17 @@ from uae_law_rag.backend.pipelines.ingest import embed as embed_mod
 from uae_law_rag.backend.pipelines.evaluator import checks as evaluator_checks
 from uae_law_rag.backend.pipelines.evaluator.pipeline import run_evaluator_pipeline
 from uae_law_rag.backend.pipelines.generation.pipeline import run_generation_pipeline
-from uae_law_rag.backend.pipelines.retrieval.pipeline import run_retrieval_pipeline
+from uae_law_rag.backend.services._shared import (
+    _normalize_context,
+    _resolve_int_value,
+    _resolve_mapping_value,
+    _resolve_provider_mode,
+    _resolve_value,
+)
+from uae_law_rag.backend.services.retrieval_service import (
+    RetrievalGateDecision,
+    execute_retrieval,
+)
 from uae_law_rag.backend.schemas.audit import TraceContext
 from uae_law_rag.backend.schemas.evaluator import EvaluatorConfig, EvaluationResult
 from uae_law_rag.backend.schemas.generation import GenerationBundle
@@ -112,19 +122,6 @@ class LlmDecision:
 
 
 @dataclass(frozen=True)
-class RetrievalGateDecision:
-    """
-    [职责] RetrievalGateDecision：封装 retrieval gate 裁决结果（是否通过 + 原因）。
-    [边界] 仅表达 gate 结果，不负责 DB 写回。
-    [上游关系] chat_service 在 retrieval pipeline 完成后调用。
-    [下游关系] chat_service 根据裁决决定 blocked/继续。
-    """
-
-    passed: bool
-    reasons: Sequence[str]
-
-
-@dataclass(frozen=True)
 class GenerationGateDecision:
     """
     [职责] GenerationGateDecision：封装 generation gate 状态与原因。
@@ -148,118 +145,6 @@ class EvaluatorGateDecision:
 
     status: str
     reasons: Sequence[str]
-
-
-def _normalize_context(context: Optional[Any]) -> Dict[str, Any]:
-    """
-    [职责] 归一化 context 为 dict（兼容 pydantic/model_dump）。
-    [边界] 不做字段校验；仅处理数据形态。
-    [上游关系] chat(...) 调用。
-    [下游关系] embed/retrieval 配置解析。
-    """
-    if context is None:
-        return {}
-    if isinstance(context, Mapping):
-        return dict(context)
-    if hasattr(context, "model_dump"):
-        return dict(context.model_dump())  # docstring: 兼容 pydantic v2
-    if hasattr(context, "dict"):
-        return dict(context.dict())  # docstring: 兼容 pydantic v1
-    try:
-        return dict(vars(context))  # docstring: 兜底对象属性
-    except Exception:
-        return {}
-
-
-def _resolve_value(
-    *,
-    key: str,
-    context: Mapping[str, Any],
-    kb: Mapping[str, Any],
-    settings: Mapping[str, Any],
-    default: Any,
-) -> tuple[Any, str]:
-    """
-    [职责] 按优先级解析配置值（context > kb > settings > default）。
-    [边界] 不校验类型；调用方负责类型转换。
-    [上游关系] embed/retrieval 决策调用。
-    [下游关系] 返回值与来源标签。
-    """
-    if key in context and context.get(key) is not None:
-        return context.get(key), "context"  # docstring: request/context 覆盖
-    if key in kb and kb.get(key) is not None:
-        return kb.get(key), "kb"  # docstring: KB 默认
-    if key in settings and settings.get(key) is not None:
-        return settings.get(key), "conversation"  # docstring: conversation settings 覆盖
-    return default, "default"  # docstring: 最终兜底（不得散落硬编码）
-
-
-def _resolve_mapping_value(
-    *,
-    keys: Sequence[str],
-    context: Mapping[str, Any],
-    kb: Mapping[str, Any],
-    settings: Mapping[str, Any],
-) -> tuple[Dict[str, Any], str]:
-    """
-    [职责] 解析 Mapping 配置值（context > kb > settings）。
-    [边界] 非 Mapping 回退空 dict；不做字段校验。
-    [上游关系] generation/evaluator 配置构造调用。
-    [下游关系] run_generation_pipeline/run_evaluator_pipeline 入参。
-    """
-    for key in keys:
-        value = context.get(key) if key in context else None
-        if isinstance(value, Mapping):
-            return dict(value), "context"  # docstring: context 覆盖
-    for key in keys:
-        value = kb.get(key) if key in kb else None
-        if isinstance(value, Mapping):
-            return dict(value), "kb"  # docstring: KB 覆盖
-    for key in keys:
-        value = settings.get(key) if key in settings else None
-        if isinstance(value, Mapping):
-            return dict(value), "conversation"  # docstring: conversation settings 覆盖
-    return {}, "default"  # docstring: 缺省回退空 dict
-
-
-def _resolve_int_value(
-    *,
-    key: str,
-    context: Mapping[str, Any],
-    kb: Mapping[str, Any],
-    settings: Mapping[str, Any],
-    default: int,
-) -> int:
-    """
-    [职责] 解析整型配置值（保留 0）。
-    [边界] 仅做 int 转换；不做范围校验。
-    [上游关系] chat(...) 调用。
-    [下游关系] retrieval 配置与 gate 判定。
-    """
-    value, _source = _resolve_value(
-        key=key,
-        context=context,
-        kb=kb,
-        settings=settings,
-        default=default,
-    )
-    if value is None:
-        return int(default)  # docstring: None 回退默认值
-    return int(value)  # docstring: 转为 int
-
-
-def _resolve_provider_mode(provider: str) -> str:
-    """
-    [职责] 根据 provider 推断运行模式（local/remote）。
-    [边界] 仅基于 settings.LOCAL_MODELS 与 provider 名称判断。
-    [上游关系] chat_service 生成 provider_snapshot。
-    [下游关系] debug/provider_snapshot 审计输出。
-    """
-    if settings.LOCAL_MODELS:
-        local_providers = {"ollama", "mock", "local", "hash"}  # docstring: 本地 provider 集合
-        if str(provider or "").strip().lower() in local_providers:
-            return "local"  # docstring: local 模式
-    return "remote"  # docstring: 兜底 remote
 
 
 def _resolve_embed_decision(
@@ -632,18 +517,6 @@ def _advance_state(current: str, next_state: str) -> str:
             detail={"from": current, "to": next_state},
         )  # docstring: 状态机约束违反
     return next_state
-
-
-def _evaluate_retrieval_gate(*, hits_count: int) -> RetrievalGateDecision:
-    """
-    [职责] 执行最小 retrieval gate 裁决（必须有命中）。
-    [边界] 仅基于 hits_count；不做 coverage/quality 判断。
-    [上游关系] chat(...) 在 retrieval pipeline 后调用。
-    [下游关系] message.status blocked/continue 决策。
-    """
-    if hits_count <= 0:
-        return RetrievalGateDecision(passed=False, reasons=("no_evidence",))  # docstring: 无证据阻断
-    return RetrievalGateDecision(passed=True, reasons=())  # docstring: 命中通过
 
 
 def _evaluate_generation_gate(bundle: GenerationBundle) -> GenerationGateDecision:
@@ -1090,25 +963,26 @@ async def chat(
             query_vector = vectors[0] if vectors else None  # docstring: 提取首个向量
 
         current_stage = "retrieval"
-        bundle = await run_retrieval_pipeline(
+        retrieval_result = await execute_retrieval(
             session=session,
             milvus_repo=milvus_repo,
             retrieval_repo=retrieval_repo,
             message_id=message_id,
             kb_id=kb_id_final,
             query_text=query_text,
-            query_vector=list(query_vector) if query_vector is not None else None,
+            query_vector=query_vector,
             config=retrieval_config,
             ctx=ctx,
-        )  # docstring: 执行 retrieval pipeline
+        )  # docstring: 执行 retrieval service
 
-        retrieval_record_id = str(bundle.record.id)  # docstring: retrieval_record_id
-        retrieval_provider_snapshot = dict(bundle.record.provider_snapshot)  # docstring: provider_snapshot
-        retrieval_timing_ms = dict(bundle.record.timing_ms)  # docstring: timing_ms
-        hits_count = len(bundle.hits)  # docstring: 命中数量
+        bundle = retrieval_result.bundle  # docstring: retrieval bundle
+        retrieval_record_id = retrieval_result.record_id  # docstring: retrieval_record_id
+        retrieval_provider_snapshot = retrieval_result.provider_snapshot  # docstring: provider_snapshot
+        retrieval_timing_ms = retrieval_result.timing_ms  # docstring: timing_ms
+        hits_count = retrieval_result.hits_count  # docstring: 命中数量
         await session.commit()  # docstring: 提交 retrieval 结果（可回放）
 
-        retrieval_gate = _evaluate_retrieval_gate(hits_count=hits_count or 0)  # docstring: retrieval gate 裁决
+        retrieval_gate = retrieval_result.gate  # docstring: retrieval gate 裁决
 
         msg_row = await msg_repo.get_by_id(message_id)  # docstring: 回查 message 以写回状态
         if msg_row is None:
