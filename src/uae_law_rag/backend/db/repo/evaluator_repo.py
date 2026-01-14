@@ -21,6 +21,10 @@ class EvaluatorRepo:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session  # docstring: SQLAlchemy AsyncSession
 
+    async def get_record(self, evaluation_record_id: str) -> Optional[EvaluationRecordModel]:
+        """Fetch evaluation record by id."""  # docstring: 回放与调试
+        return await self._session.get(EvaluationRecordModel, evaluation_record_id)
+
     async def create(
         self,
         *,

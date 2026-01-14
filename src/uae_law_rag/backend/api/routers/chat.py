@@ -197,11 +197,10 @@ async def chat_endpoint(
     )  # docstring: 读取 debug payload
     debug_envelope: Optional[ChatDebugEnvelope] = None
     if isinstance(debug_payload, dict):
-        debug_timing_ms = timing_ms if debug_enabled else {}  # docstring: return_records 不输出 timing_ms 细节
         debug_envelope = _build_debug_envelope(
             trace_id=trace_id,
             request_id=request_id,
-            timing_ms=debug_timing_ms,
+            timing_ms=timing_ms,
             debug_payload=debug_payload,
             include_gate=bool(debug_enabled),
         )  # docstring: 组装 ChatDebugEnvelope

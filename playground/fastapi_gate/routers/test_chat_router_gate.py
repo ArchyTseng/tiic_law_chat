@@ -157,6 +157,9 @@ async def test_chat_router_return_records_gate(
         yield session  # docstring: reuse test session
 
     async def _fake_chat(**_kwargs):
+        rrid = str(new_uuid())
+        grid = str(new_uuid())
+        erid = str(new_uuid())
         return {
             "conversation_id": str(new_uuid()),
             "message_id": str(new_uuid()),
@@ -169,9 +172,9 @@ async def test_chat_router_return_records_gate(
             TRACE_ID_KEY: str(trace_id),
             REQUEST_ID_KEY: str(request_id),
             DEBUG_KEY: {
-                RETRIEVAL_RECORD_ID_KEY: str(new_uuid()),
-                GENERATION_RECORD_ID_KEY: str(new_uuid()),
-                EVALUATION_RECORD_ID_KEY: str(new_uuid()),
+                RETRIEVAL_RECORD_ID_KEY: rrid,
+                GENERATION_RECORD_ID_KEY: grid,
+                EVALUATION_RECORD_ID_KEY: erid,
                 "gate": {"retrieval": {"passed": True}},
             },
         }  # docstring: stub return_records payload
@@ -204,6 +207,17 @@ async def test_chat_router_return_records_gate(
     data = resp.json()
     assert data.get("debug")  # docstring: return_records 必须返回 debug
     assert data["debug"]["records"][RETRIEVAL_RECORD_ID_KEY]  # docstring: retrieval_record_id 必须存在
+    assert data["debug"]["records"][GENERATION_RECORD_ID_KEY]  # docstring: generation_record_id 必须存在
+    assert data["debug"]["records"][EVALUATION_RECORD_ID_KEY]  # docstring: evaluation_record_id 必须存在
     assert not data["debug"].get("gate")  # docstring: return_records 模式不输出 gate
+
+    # timing_ms 作为可观测性字段：允许保留（不等同 debug gate）
+    assert "timing_ms" in data["debug"]  # docstring: debug envelope must include timing_ms
+    assert isinstance(data["debug"]["timing_ms"], dict)  # docstring: timing_ms must be dict-like
+    assert "total_ms" in data["debug"]["timing_ms"]  # docstring: total_ms should exist for UI
+
+    # 顶层 trace/request 必须与 header 及 stub 输出一致（避免映射漂移）
+    assert data.get("trace_id") == str(trace_id)  # docstring: trace_id must be stable
+    assert data.get("request_id") == str(request_id)  # docstring: request_id must be stable
     assert resp.headers["x-trace-id"] == str(trace_id)  # docstring: trace_id must propagate
     assert resp.headers["x-request-id"] == str(request_id)  # docstring: request_id must propagate
