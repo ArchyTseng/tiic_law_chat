@@ -72,6 +72,7 @@ def to_json_response(
     headers: Dict[str, str] = {}
     if trace_id:
         headers[_TRACE_HEADER] = str(trace_id)  # docstring: 回写 trace_id header
+    headers[_TRACE_HEADER] = str(response.error.trace_id)  # docstring: header/body trace_id 必须一致（无则已兜底生成）
     if request_id:
         headers[_REQUEST_HEADER] = str(request_id)  # docstring: 回写 request_id header
 
