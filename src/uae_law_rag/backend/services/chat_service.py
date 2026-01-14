@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional, Sequence, cast
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,14 +27,17 @@ from uae_law_rag.backend.db.repo import (
 from uae_law_rag.backend.kb.repo import MilvusRepo
 from uae_law_rag.backend.pipelines.base.context import PipelineContext
 from uae_law_rag.backend.pipelines.ingest import embed as embed_mod
-from uae_law_rag.backend.pipelines.evaluator import checks as evaluator_checks
-from uae_law_rag.backend.pipelines.evaluator.pipeline import run_evaluator_pipeline
 from uae_law_rag.backend.services._shared import (
     _normalize_context,
     _resolve_int_value,
     _resolve_mapping_value,
     _resolve_provider_mode,
     _resolve_value,
+)
+from uae_law_rag.backend.services.evaluator_service import (
+    EvaluatorGateDecision,
+    _build_evaluator_summary,
+    execute_evaluator,
 )
 from uae_law_rag.backend.services.generation_service import (
     GenerationGateDecision,
@@ -46,7 +49,7 @@ from uae_law_rag.backend.services.retrieval_service import (
     execute_retrieval,
 )
 from uae_law_rag.backend.schemas.audit import TraceContext
-from uae_law_rag.backend.schemas.evaluator import EvaluatorConfig, EvaluationResult
+from uae_law_rag.backend.schemas.evaluator import EvaluatorConfig
 from uae_law_rag.backend.utils.constants import (
     DEFAULT_PROMPT_NAME,
     DEFAULT_PROMPT_VERSION,
@@ -122,19 +125,6 @@ class LlmDecision:
     source: str
     entitled: bool
     entitlement_reason: Optional[str]
-
-
-@dataclass(frozen=True)
-class EvaluatorGateDecision:
-    """
-    [职责] EvaluatorGateDecision：封装 evaluator 裁决状态与原因。
-    [边界] 仅记录 evaluator 判定，不负责 message.status 映射。
-    [上游关系] chat_service 在 evaluator pipeline 完成后调用。
-    [下游关系] message.status 映射与 debug 输出。
-    """
-
-    status: str
-    reasons: Sequence[str]
 
 
 def _resolve_embed_decision(
@@ -509,41 +499,6 @@ def _advance_state(current: str, next_state: str) -> str:
     return next_state
 
 
-def _evaluate_evaluator_gate(result: EvaluationResult) -> EvaluatorGateDecision:
-    """
-    [职责] 解析 evaluator 结果并生成 gate 决策（status + reasons）。
-    [边界] 仅基于 checks/warnings；不改变 evaluator status。
-    [上游关系] chat(...) 在 evaluator pipeline 后调用。
-    [下游关系] message.status 映射与 debug 输出。
-    """
-    status = str(result.status or "skipped")  # docstring: evaluator status
-    reasons: list[str] = []  # docstring: 原因列表
-    for check in list(result.checks or []):
-        check_status = str(getattr(check, "status", "") or "")
-        if check_status in {"fail", "warn"}:
-            # NOTE: EvaluatorCheck MVP contract uses `reason` as the primary human-readable field.
-            # Keep backward-compat with `message` if legacy objects exist.
-            reason_text = str(
-                getattr(check, "reason", "") or getattr(check, "message", "") or getattr(check, "name", "") or ""
-            ).strip()
-            reasons.append(reason_text or "check_failed")  # docstring: 兜底原因
-    return EvaluatorGateDecision(status=status, reasons=tuple([r for r in reasons if r]))
-
-
-def _map_evaluation_status(status: str) -> str:
-    """
-    [职责] 将 EvaluationStatus 映射为 message.status（最终裁决）。
-    [边界] 仅处理 pass/partial/fail/skipped；未知回退 failed。
-    [上游关系] chat(...) evaluator 完成后调用。
-    [下游关系] message.status 写回与 response.status。
-    """
-    if status == "pass":
-        return MESSAGE_STATUS_SUCCESS  # docstring: evaluator pass -> success
-    if status == "partial":
-        return MESSAGE_STATUS_PARTIAL  # docstring: evaluator partial -> partial
-    return MESSAGE_STATUS_FAILED  # docstring: fail/skipped -> failed
-
-
 def _build_debug_payload(
     *,
     retrieval_record_id: Optional[str],
@@ -601,40 +556,6 @@ def _merge_provider_snapshot(*snapshots: Optional[Mapping[str, Any]]) -> Dict[st
         if isinstance(snapshot, Mapping):
             merged.update(snapshot)  # docstring: 覆盖更新
     return merged
-
-
-def _build_evaluator_summary(
-    *,
-    evaluator: Optional[EvaluationResult],
-    fallback_status: str,
-    fallback_rule_version: str,
-    fallback_reasons: Sequence[str],
-) -> Dict[str, Any]:
-    """
-    [职责] 组装 evaluator 摘要（status/rule_version/warnings）。
-    [边界] evaluator 为空时回退到 fallback；不输出完整 checks。
-    [上游关系] chat(...) 调用。
-    [下游关系] response.evaluator 供前端展示。
-    """
-    if evaluator is None:
-        return {
-            "status": fallback_status,
-            "rule_version": fallback_rule_version,
-            "warnings": list(fallback_reasons),
-        }  # docstring: evaluator 缺失兜底
-    warnings = []
-    for check in list(evaluator.checks or []):
-        if str(getattr(check, "status", "")) in {"warn", "fail"}:
-            msg = str(
-                getattr(check, "reason", "") or getattr(check, "message", "") or getattr(check, "name", "") or ""
-            ).strip()
-            if msg:
-                warnings.append(msg)  # docstring: 收集 warn/fail 消息
-    return {
-        "status": str(evaluator.status),
-        "rule_version": str(evaluator.config.rule_version),
-        "warnings": [w for w in warnings if w],
-    }  # docstring: evaluator 摘要
 
 
 def _classify_error(exc: Exception, *, stage: Optional[str]) -> DomainError:
@@ -1012,30 +933,24 @@ async def chat(
 
         state = _advance_state(state, STATE_EVALUATION_DONE)  # docstring: 状态推进到 EVALUATION_DONE
         current_stage = "evaluator"
-        evaluator_input = {
-            "conversation_id": conv_id,
-            "message_id": message_id,
-            "retrieval_bundle": bundle,
-            "generation_bundle": generation_bundle,
-            "config": evaluator_config,
-        }  # docstring: evaluator 输入快照
-        evaluator_input_typed = cast(
-            evaluator_checks.EvaluatorInput, evaluator_input
-        )  # docstring: 类型收窄以匹配 EvaluatorInput
-        evaluation_result = await run_evaluator_pipeline(
+        evaluator_result = await execute_evaluator(
             session=session,
             evaluator_repo=evaluator_repo,
-            input=evaluator_input_typed,
+            conversation_id=conv_id,
+            message_id=message_id,
+            retrieval_bundle=bundle,
+            generation_bundle=generation_bundle,
+            evaluator_config=evaluator_config,
             ctx=ctx,
-        )  # docstring: 执行 evaluator pipeline
-        evaluation_record_id = str(evaluation_result.id)  # docstring: evaluation_record_id
-        evaluation_timing_ms = dict(
-            (evaluation_result.meta or {}).get(TIMING_MS_KEY, {}) or {}
-        )  # docstring: evaluator timing_ms
-        evaluator_gate = _evaluate_evaluator_gate(evaluation_result)  # docstring: evaluator gate 记录
+        )  # docstring: 执行 evaluator service
+
+        evaluation_result = evaluator_result.evaluation_result  # docstring: evaluator result
+        evaluation_record_id = evaluator_result.record_id  # docstring: evaluation_record_id
+        evaluation_timing_ms = evaluator_result.timing_ms  # docstring: evaluator timing_ms
+        evaluator_gate = evaluator_result.gate  # docstring: evaluator gate 记录
         await session.commit()  # docstring: 提交 evaluator 结果（可回放）
 
-        status = _map_evaluation_status(str(evaluation_result.status))  # docstring: 映射最终 status
+        status = evaluator_result.mapped_message_status  # docstring: 映射最终 status
         answer_text = str(generation_bundle.answer or "").strip()  # docstring: answer 输出
         citations = _extract_generation_citations(generation_bundle)  # docstring: citations 输出
         if status not in {MESSAGE_STATUS_SUCCESS, MESSAGE_STATUS_PARTIAL}:
@@ -1102,12 +1017,7 @@ async def chat(
             else None
         )
 
-        evaluator_summary = _build_evaluator_summary(
-            evaluator=evaluation_result,
-            fallback_status="skipped",
-            fallback_rule_version=str(evaluator_config.rule_version),
-            fallback_reasons=(),
-        )  # docstring: evaluator 摘要
+        evaluator_summary = evaluator_result.summary  # docstring: evaluator 摘要
 
         response: Dict[str, Any] = {
             "conversation_id": conv_id,
