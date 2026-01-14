@@ -31,7 +31,6 @@ EvaluationRecordId = UUIDStr  # docstring: evaluation_record_id（评估记录ID
 ErrorCode = Literal[
     "bad_request",
     "not_found",
-    "conflict",
     "external_dependency",
     "pipeline_error",
     "internal_error",
