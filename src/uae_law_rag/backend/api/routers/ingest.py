@@ -15,7 +15,6 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from uae_law_rag.backend.api.deps import (
-    get_ingest_repo,
     get_milvus_repo,
     get_session,
     get_trace_context,
@@ -163,7 +162,6 @@ async def ingest(
 async def get_ingest_status(
     file_id: str,
     session: AsyncSession = Depends(get_session),
-    ingest_repo: IngestRepo = Depends(get_ingest_repo),
     trace_context: TraceContext = Depends(get_trace_context),
 ) -> IngestResponse:
     """
@@ -173,6 +171,7 @@ async def get_ingest_status(
     [下游关系] 返回 IngestResponse（不含 debug）。
     """
     try:
+        ingest_repo = IngestRepo(session)  # docstring: 装配 ingest repo
         file_row = await ingest_repo.get_file(file_id)  # docstring: 查询文件记录
         if file_row is None:
             raise NotFoundError(message="file not found")  # docstring: 文件不存在
