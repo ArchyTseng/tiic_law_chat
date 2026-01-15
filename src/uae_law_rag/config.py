@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     DEEPSEEK_CHAT_MODEL: str = "deepseek-chat"
     DEEPSEEK_REASONER_MODEL: str = "deepseek-reasoner"
 
-    OLLAMA_CHAT_MODEL: str = "qwen3:4b"
+    OLLAMA_CHAT_MODEL: str = "qwen2.5:1.5b"
     OLLAMA_EMBED_MODEL: str = "qwen3-embedding:4b"
 
     DEVICE: str = "auto"

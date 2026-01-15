@@ -21,7 +21,7 @@ from uae_law_rag.backend.schemas.retrieval import RetrievalHit
 
 __all__ = ["postprocess_generation"]
 
-_STATUS_ORDER = {"success": 0, "partial": 1, "failed": 2}  # docstring: status 严重程度顺序
+_STATUS_ORDER = {"success": 0, "partial": 1, "blocked": 2, "failed": 3}  # docstring: status 严重程度顺序
 _DEFAULT_MAX_QUOTE_CHARS = 240  # docstring: citation.quote 最大长度
 
 
@@ -78,8 +78,8 @@ def _normalize_config(config: Optional[Mapping[str, Any]]) -> _PostprocessConfig
         strict_json=_as_bool("strict_json", True),
         require_citations=_as_bool("require_citations", True),
         parse_error_status=_as_status("parse_error_status", "partial"),
-        missing_citations_status=_as_status("missing_citations_status", "failed"),
-        invalid_citations_status=_as_status("invalid_citations_status", "partial"),
+        missing_citations_status=_as_status("missing_citations_status", "blocked"),
+        invalid_citations_status=_as_status("invalid_citations_status", "blocked"),
         max_citations=_as_opt_int("max_citations"),
         max_quote_chars=_as_int("max_quote_chars", _DEFAULT_MAX_QUOTE_CHARS),
     )
@@ -450,6 +450,26 @@ def postprocess_generation(
     output_structured = dict(payload or {})  # docstring: 保留原始结构
     output_structured["answer"] = answer  # docstring: 覆盖 answer
     output_structured["citations"] = citation_payload  # docstring: 覆盖 citations
+
+    # --- citations-only failure => blocked (not failed) ---
+    if cfg.require_citations and not citations:
+        # docstring: 如果仅因 citations 缺失/无效导致失败，则降级为 blocked 并清空 answer，避免“无引用但给出结论”
+        citation_error_prefixes = (
+            "citations missing",
+            "no valid citations",
+            "invalid citations:",
+            "missing citations:",
+        )
+        only_citation_errors = bool(errors) and all(str(e).startswith(citation_error_prefixes) for e in errors)
+
+        if only_citation_errors:
+            # docstring: 强制 blocked 语义（检索有证据但生成未给出可验证引用）
+            status = "blocked"
+            answer = ""
+            citations = []
+            citation_payload = []
+            output_structured["answer"] = ""
+            output_structured["citations"] = []
 
     error_message = "; ".join(errors) if errors else None  # docstring: 错误汇总
     return {

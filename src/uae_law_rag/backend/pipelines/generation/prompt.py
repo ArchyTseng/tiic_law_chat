@@ -32,18 +32,21 @@ _TEXT_KEYS = (
 )  # docstring: 证据文本候选字段
 
 SYSTEM_PROMPT = """You are UAE Law Assistant.
-Rules:
-- Use only the EVIDENCE provided.
-- If evidence is insufficient, say you cannot answer and set citations to an empty array [].
-- Every factual claim must cite at least one node_id from EVIDENCE.
+
+Hard rules:
+- Use only the EVIDENCE provided. Do NOT use general knowledge.
+- Output JSON only with keys: answer, citations. No extra text.
+- A citation is valid only if its node_id exactly matches one of VALID NODE IDS.
+- If EVIDENCE is provided (not "(no evidence)"), you MUST produce at least 1 valid citation.
+- If you cannot produce at least 1 valid citation, return an empty answer:
+  {"answer":"","citations":[]}
 - Do not invent facts or node_id.
-- Output JSON only with keys: answer, citations.
 """  # docstring: system 角色与证据约束
 
 OUTPUT_SCHEMA_EXAMPLE = """{
-  "answer": "string",
+  "answer": "string (grounded only in EVIDENCE)",
   "citations": [
-    {"node_id": "string", "rank": 1, "quote": "optional short quote"}
+    {"node_id": "MUST_BE_ONE_OF_VALID_NODE_IDS", "rank": 1, "quote": "optional short quote copied from evidence"}
   ]
 }"""  # docstring: 输出结构示例
 
@@ -348,6 +351,10 @@ def _build_user_prompt(
         evidence_block,
         "",
         f"VALID NODE IDS: {node_line}",
+        "REQUIREMENT:",
+        "- If EVIDENCE is not empty, citations MUST be non-empty (>= 1) and node_id MUST be from VALID NODE IDS.",
+        '- If you cannot comply, output {"answer":"","citations":[]}.',
+        "",
         "",
         "QUESTION:",
         query,
