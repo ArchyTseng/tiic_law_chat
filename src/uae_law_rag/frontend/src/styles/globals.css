@@ -1,0 +1,19 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: "Source Sans 3", "Noto Sans", "Helvetica Neue", sans-serif;
+  line-height: 1.5;
+  color: #111111;
+  background-color: #f7f5f2;
+}
