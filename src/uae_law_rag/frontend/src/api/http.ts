@@ -31,8 +31,20 @@ export class HttpError extends Error {
   }
 }
 
+const getOrCreateUserId = (): string => {
+  const key = 'uae_law_rag_user_id'
+  const existing = localStorage.getItem(key)
+  if (existing) return existing
+
+  const created =
+    globalThis.crypto?.randomUUID?.() ?? `anon_${Date.now().toString(36)}`
+  localStorage.setItem(key, created)
+  return created
+}
+
 const DEFAULT_HEADERS: Record<string, string> = {
   'Content-Type': 'application/json',
+  'x-user-id': 'dev-user', // docstring: M1 本地联调默认用户；后续替换为 auth/session
 }
 
 function safeParseJson(text: string): JsonValue | undefined {
@@ -49,7 +61,7 @@ export const requestJson = async <T>(url: string, options: RequestOptions = {}):
 
   const response = await fetch(url, {
     method,
-    headers: { ...DEFAULT_HEADERS, ...headers },
+    headers: { ...DEFAULT_HEADERS, 'x-user-id': getOrCreateUserId(), ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal,
   })

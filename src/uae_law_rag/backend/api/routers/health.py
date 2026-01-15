@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends
@@ -34,7 +35,8 @@ async def health_check(
     [下游关系] DB/Milvus 客户端执行健康检查。
     """
     status = "ok"  # docstring: 默认健康状态
-    db_status: Dict[str, Any] = {"ok": True}  # docstring: DB 健康容器
+    db_url = os.getenv("UAE_LAW_RAG_DATABASE_URL") or os.getenv("DATABASE_URL") or os.getenv("DB_URL")
+    db_status: Dict[str, Any] = {"ok": True, "url": db_url}  # docstring: DB 健康容器
     milvus_status: Dict[str, Any] = {"ok": True, "optional": True}  # docstring: Milvus 健康容器
 
     try:

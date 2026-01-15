@@ -9,10 +9,12 @@
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from typing import AsyncIterator
 
 from fastapi import Request
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from uae_law_rag.backend.db.engine import SessionLocal
@@ -38,6 +40,10 @@ async def get_session() -> AsyncIterator[AsyncSession]:
     """
     async with SessionLocal() as session:
         try:
+            if os.getenv("UAE_LAW_RAG_DEBUG_DB", "").lower() in {"1", "true", "yes"}:
+                rows = (await session.execute(text("PRAGMA database_list;"))).all()
+                # rows: [(seq, name, file), ...]
+                print("[deps.get_session] PRAGMA database_list =", rows)
             yield session  # docstring: 输出 session 给下游使用
         except Exception:
             # docstring: 请求链路异常时回滚，避免 session 污染

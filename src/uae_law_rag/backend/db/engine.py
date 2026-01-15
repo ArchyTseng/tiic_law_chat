@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -27,7 +28,19 @@ def _default_db_url() -> str:
       2) env: DATABASE_URL
       3) fallback: local sqlite file
     """  # docstring: 最小可用配置，不强绑任何 settings 框架
-    return os.getenv("UAE_LAW_RAG_DATABASE_URL") or os.getenv("DATABASE_URL") or "sqlite+aiosqlite:///./uae_law_rag.db"
+    repo_root = Path(os.getcwd()).resolve()  # .../src/uae_law_rag/backend/db/engine.py -> repo root
+    db_path = repo_root / ".Local" / "uae_law_rag.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return f"sqlite+aiosqlite:///{db_path.as_posix()}"
+
+
+def resolve_db_url(override: str | None = None) -> str:
+    if override:
+        return override
+    env_url = os.getenv("UAE_LAW_RAG_DATABASE_URL", "").strip()
+    if env_url:
+        return env_url
+    return _default_db_url()
 
 
 def create_engine(*, url: str | None = None, echo: bool | None = None) -> AsyncEngine:
@@ -38,7 +51,7 @@ def create_engine(*, url: str | None = None, echo: bool | None = None) -> AsyncE
       - For SQLite we rely on aiosqlite driver.
       - Foreign keys for SQLite should be enabled at connection time (see fts.py / app startup hook if needed).
     """  # docstring: 生产/测试都可复用；测试可传入临时 sqlite 文件路径
-    db_url = url or _default_db_url()  # docstring: 数据库连接串
+    db_url = resolve_db_url(url)  # docstring: 数据库连接串
     db_echo = echo if echo is not None else (os.getenv("SQL_ECHO", "0") == "1")  # docstring: SQL 打印开关
 
     return create_async_engine(

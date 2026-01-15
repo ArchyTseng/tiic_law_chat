@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import os
+import traceback
 from typing import Any, Dict, Optional, Tuple
 
 from fastapi.responses import JSONResponse
@@ -64,6 +66,10 @@ def to_json_response(
     [下游关系] FastAPI 直接返回该响应对象。
     """
     status_code, response = to_error_response(error, trace_id=trace_id)  # docstring: 构建错误响应
+    # DEV-ONLY: 打印 500 的 traceback（默认关闭，避免污染日志）
+    if status_code >= 500 and os.getenv("UAE_LAW_RAG_DEBUG_TRACEBACK", "").lower() in {"1", "true", "yes"}:
+        tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        print(f"[api.errors] internal_error trace_id={trace_id} request_id={request_id}\n{tb}")
     if hasattr(response, "model_dump"):
         content: Dict[str, Any] = response.model_dump()  # type: ignore[assignment]  # docstring: pydantic v2 序列化
     else:

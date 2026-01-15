@@ -59,17 +59,60 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def _coerce_enum(value: Any, enum_cls: Any, *, name: str) -> Any:
     """
-    [职责] 将 CLI 的字符串参数转换为项目定义的 Enum（IndexType/MetricType）。
+    [职责] 将 CLI 的字符串参数转换为项目定义的“枚举型”值（支持 Literal[...] 或 Enum）。
     [边界] 非法值直接抛 ValueError；不做容错替换。
     [上游关系] main 调用。
-    [下游关系] _run_async/build_collection_spec 使用强类型枚举。
+    [下游关系] _run_async/build_collection_spec 使用强类型枚举（Literal/Enum）。
     """
-    if isinstance(value, enum_cls):
-        return value
+    from enum import Enum  # docstring: 局部 import，避免脚本顶部改动过多
+    from typing import get_args, get_origin  # docstring: 用于解析 Literal/Union 等 typing 构造
+
+    if value is None:
+        raise ValueError(f"invalid {name}: {value}")
+
+    # --- Case 1: typing.Literal[...] ---
+    origin = get_origin(enum_cls)
+    if origin is not None:
+        allowed = list(get_args(enum_cls))
+
+        # docstring: CLI 常见是字符串；做 trim + 大小写兼容（Literal 里是大写）
+        if isinstance(value, str):
+            raw = value.strip()
+            candidates = (raw, raw.upper(), raw.lower())
+            for cand in candidates:
+                if cand in allowed:
+                    return cand
+        else:
+            if value in allowed:
+                return value
+
+        raise ValueError(f"invalid {name}: {value}")
+
+    # --- Case 2: Enum 子类（若未来你改回 Enum，也能工作） ---
     try:
-        return enum_cls(value)
-    except Exception as exc:
-        raise ValueError(f"invalid {name}: {value}") from exc
+        if isinstance(enum_cls, type) and issubclass(enum_cls, Enum):
+            if isinstance(value, enum_cls):
+                return value
+            if isinstance(value, str):
+                raw = value.strip()
+                # name 匹配（COSINE）
+                try:
+                    return enum_cls[raw.upper()]  # type: ignore[index]
+                except Exception:
+                    pass
+                # value 匹配（cosine / COSINE 等）
+                for cand in (raw, raw.upper(), raw.lower()):
+                    try:
+                        return enum_cls(cand)
+                    except Exception:
+                        continue
+            return enum_cls(value)
+    except TypeError:
+        # docstring: enum_cls 不是 class/Enum，兜底到最后的 ValueError
+        pass
+
+    # --- Fallback: 不支持的类型 ---
+    raise ValueError(f"invalid {name}: {value}")
 
 
 def _normalize_int(value: int, *, name: str, minimum: int = 1) -> int:
