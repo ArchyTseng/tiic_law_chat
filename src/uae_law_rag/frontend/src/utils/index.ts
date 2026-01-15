@@ -6,4 +6,5 @@
 // 下游关系: 全前端工程（以 @/utils 作为唯一入口）。
 export * from './assert'
 export * from './format'
+export * from './json'
 export * from './logger'

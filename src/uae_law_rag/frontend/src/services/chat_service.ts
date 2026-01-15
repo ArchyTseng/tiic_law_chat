@@ -1,22 +1,54 @@
+// src/services/chat_service.ts
 //docstring
 // 职责: Chat 用例层，负责调用 API 并映射为 domain 结果。
-// 边界: 不直接渲染 UI，不在组件内调用。
-// 上游关系: pages/chat 通过交互触发。
-// 下游关系: api/endpoints/chat.ts, stores/chat_store.ts。
+// 边界: 不读写 stores，不直接渲染 UI；仅负责 Domain Input <-> HTTP DTO 映射与传输层调用编排。
+// 上游关系: stores/chat_store.ts（由 store 调用本 service）。
+// 下游关系: api/endpoints/chat.ts。
 import { postChat } from '@/api/endpoints/chat'
-import { chatStore } from '@/stores/chat_store'
+import type { ChatSendInput } from '@/types/domain/chat'
+import type { ChatResult, Citation, EvaluatorSummary } from '@/types/domain/message'
+import type { DebugEnvelope } from '@/types/domain/run'
 import type {
   ChatRequestDTO,
   ChatResponseDTO,
   CitationViewDTO,
   EvaluatorSummaryDTO,
 } from '@/types/http/chat_response'
-import type { ChatResult, Citation, EvaluatorSummary } from '@/types/domain/message'
-import type { DebugEnvelope } from '@/types/domain/run'
+import { toJsonRecord } from '@/utils/json'
 
-const mapEvaluatorSummary = (
-  evaluator: EvaluatorSummaryDTO,
-): EvaluatorSummary => {
+const toChatRequestDTO = (input: ChatSendInput): ChatRequestDTO => {
+  return {
+    query: input.query,
+    conversation_id: input.conversationId,
+    kb_id: input.kbId,
+    debug: input.debug,
+    context: input.context
+      ? {
+        keyword_top_k: input.context.keywordTopK,
+        vector_top_k: input.context.vectorTopK,
+        fusion_top_k: input.context.fusionTopK,
+        rerank_top_k: input.context.rerankTopK,
+        fusion_strategy: input.context.fusionStrategy,
+        rerank_strategy: input.context.rerankStrategy,
+        embed_provider: input.context.embedProvider,
+        embed_model: input.context.embedModel,
+        embed_dim: input.context.embedDim,
+        model_provider: input.context.modelProvider,
+        model_name: input.context.modelName,
+        prompt_name: input.context.promptName,
+        prompt_version: input.context.promptVersion,
+        evaluator_config: input.context.evaluatorConfig
+          ? toJsonRecord(input.context.evaluatorConfig, 'context.evaluatorConfig')
+          : undefined,
+        return_records: input.context.returnRecords,
+        return_hits: input.context.returnHits,
+        extra: input.context.extra ? toJsonRecord(input.context.extra, 'context.extra') : undefined,
+      }
+      : undefined,
+  } as ChatRequestDTO
+}
+
+const mapEvaluatorSummary = (evaluator: EvaluatorSummaryDTO): EvaluatorSummary => {
   return {
     status: evaluator.status,
     ruleVersion: evaluator.rule_version,
@@ -36,12 +68,8 @@ const mapCitation = (citation: CitationViewDTO): Citation => {
   }
 }
 
-const mapDebugEnvelope = (
-  debug: ChatResponseDTO['debug'],
-): DebugEnvelope | undefined => {
-  if (!debug) {
-    return undefined
-  }
+const mapDebugEnvelope = (debug: ChatResponseDTO['debug']): DebugEnvelope | undefined => {
+  if (!debug) return undefined
 
   const records = debug.records
 
@@ -75,14 +103,8 @@ const mapChatResponse = (response: ChatResponseDTO): ChatResult => {
   }
 }
 
-export const sendChat = async (payload: ChatRequestDTO): Promise<ChatResult> => {
+export const sendChat = async (input: ChatSendInput): Promise<ChatResult> => {
+  const payload = toChatRequestDTO(input)
   const response = await postChat(payload)
-  const result = mapChatResponse(response)
-  const current = chatStore.getState()
-
-  chatStore.setState({
-    results: [...current.results, result],
-  })
-
-  return result
+  return mapChatResponse(response)
 }
