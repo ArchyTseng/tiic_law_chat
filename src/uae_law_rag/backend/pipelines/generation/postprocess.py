@@ -419,6 +419,14 @@ def postprocess_generation(
         if not hit:
             missing_count += 1  # docstring: 引用不在 hits 中
             continue
+
+        # --- citation-eligible check (must have non-empty excerpt) ---
+        hit_excerpt = _coerce_str(_read_hit_field(hit, "excerpt"))
+        if not hit_excerpt or not hit_excerpt.strip():
+            # docstring: 引用命中但无可验证文本，视为缺失引用（强制进入 blocked 语义）
+            missing_count += 1
+            continue
+
         try:
             citation = _build_citation(
                 parsed=parsed,
@@ -462,25 +470,24 @@ def postprocess_generation(
     output_structured["answer"] = answer  # docstring: 覆盖 answer
     output_structured["citations"] = citation_payload  # docstring: 覆盖 citations
 
-    # --- citations-only failure => blocked (not failed) ---
+    # --- require_citations => no valid citations => BLOCKED (highest priority) ---
     if cfg.require_citations and not citations:
-        # docstring: 如果仅因 citations 缺失/无效导致失败，则降级为 blocked 并清空 answer，避免“无引用但给出结论”
-        citation_error_prefixes = (
-            "citations missing",
-            "no valid citations",
-            "invalid citations:",
-            "missing citations:",
-        )
-        only_citation_errors = bool(errors) and all(str(e).startswith(citation_error_prefixes) for e in errors)
+        # docstring: 只要要求 citations 且最终无有效 citations，就必须 blocked；
+        # 这表示“证据存在但未能产出可验证引用”，不是基础设施失败。
+        status = "blocked"
+        answer = ""
+        citations = []
+        citation_payload = []
+        output_structured["answer"] = ""
+        output_structured["citations"] = []
 
-        if only_citation_errors:
-            # docstring: 强制 blocked 语义（检索有证据但生成未给出可验证引用）
-            status = "blocked"
-            answer = ""
-            citations = []
-            citation_payload = []
-            output_structured["answer"] = ""
-            output_structured["citations"] = []
+        # docstring: 避免 answer_error 抢占语义；blocked 的根因固定为 citations 不可用
+        errors = [e for e in errors if not str(e).startswith("answer")]
+        if not any(
+            str(e).startswith(("citations", "no valid citations", "invalid citations", "missing citations"))
+            for e in errors
+        ):
+            errors.append("no valid citations")
 
     error_message = "; ".join(errors) if errors else None  # docstring: 错误汇总
     return {

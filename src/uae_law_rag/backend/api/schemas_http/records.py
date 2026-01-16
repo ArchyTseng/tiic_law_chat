@@ -24,7 +24,7 @@ from ._common import (
 
 
 HitSource = Literal["keyword", "vector", "fused", "reranked"]  # docstring: 命中来源（与 DB 语义一致）
-GenerationStatus = Literal["success", "partial", "failed"]  # docstring: 生成状态（审计输出）
+GenerationStatus = Literal["success", "partial", "blocked", "failed"]  # docstring: 生成状态（审计输出）
 EvaluationStatus = Literal["pass", "partial", "fail", "skipped"]  # docstring: 评估状态（审计输出）
 CheckStatus = Literal["pass", "fail", "warn", "skipped"]  # docstring: 单条规则状态摘要
 

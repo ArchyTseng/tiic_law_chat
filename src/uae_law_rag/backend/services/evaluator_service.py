@@ -82,13 +82,16 @@ def _evaluate_evaluator_gate(result: EvaluationResult) -> EvaluatorGateDecision:
     return EvaluatorGateDecision(status=status, reasons=tuple([r for r in reasons if r]))
 
 
-def _map_evaluation_status(status: str) -> str:
+def _map_evaluation_status(status: str, *, generation_status: str | None = None) -> str:
     """
     [职责] 将 EvaluationStatus 映射为 message.status（最终裁决）。
     [边界] 仅处理 pass/partial/fail/skipped；未知回退 failed。
     [上游关系] execute_evaluator 调用。
     [下游关系] chat_service 写回 message.status。
     """
+    # docstring: generation 被判定 blocked 时，优先透传为 message.blocked（“有证据但不可验证引用”）
+    if (generation_status or "").strip().lower() == "blocked":
+        return "blocked"
     if status == "pass":
         return "success"  # docstring: evaluator pass -> success
     if status == "partial":
@@ -174,7 +177,10 @@ async def execute_evaluator(
         fallback_rule_version=str(evaluator_config.rule_version),
         fallback_reasons=(),
     )  # docstring: evaluator 摘要
-    mapped_message_status = _map_evaluation_status(str(evaluation_result.status))  # docstring: 映射最终状态
+    mapped_message_status = _map_evaluation_status(
+        str(evaluation_result.status),
+        generation_status=str(getattr(generation_bundle.record, "status", "") or ""),
+    )  # docstring: 映射最终状态
 
     return EvaluatorServiceResult(
         evaluation_result=evaluation_result,

@@ -25,7 +25,6 @@ if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))  # docstring: 优先使用本地源码而非 site-packages
 
 from uae_law_rag.backend.db.base import Base
-from uae_law_rag.backend.db import models  # noqa: F401  # docstring: 强制导入以注册全部表到 Base.metadata
 
 
 @pytest.fixture(scope="session")

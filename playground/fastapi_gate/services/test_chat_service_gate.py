@@ -431,7 +431,7 @@ async def test_chat_service_gate(session: AsyncSession) -> None:
             response_success["message_id"]
         )  # docstring: 回查 generation record
         assert gen_record is not None
-        assert gen_record.status in {"success", "partial", "failed"}  # docstring: generation 状态合法
+        assert gen_record.status in {"success", "partial", "blocked", "failed"}  # docstring: generation 状态合法
 
         eval_record = await evaluator_repo.get_by_message_id(
             response_success["message_id"]
@@ -476,6 +476,88 @@ async def test_chat_service_gate(session: AsyncSession) -> None:
         assert partial_eval is not None
         assert partial_eval.status == "partial"  # docstring: evaluation.status partial
 
+        # --- Case D2: GENERATION BLOCKED (citations invalid) but evaluator fails => message.status MUST be blocked ---
+        # docstring: 覆盖 evaluator_service 的新语义：generation.blocked 优先映射到 message.blocked
+        # - 构造条件：retrieval 有 hits；mock LLM 返回 citations 指向一个 hit，但该 hit.excerpt 为空
+        # - postprocess 将该 citation 视为不可验证 => citations 为空 => generation.status = blocked
+        # - evaluator require_citations/min_citations 会 fail，但 message.status 仍应被映射为 blocked
+        #
+        # 先复用上一轮 success 的 retrieval_record，选一个 excerpt 为空的 hit.node_id 作为“不可验证引用”
+        retrieval_record_for_block = await retrieval_repo.get_record(retrieval_record_id)
+        assert retrieval_record_for_block is not None
+        hits_for_block = await retrieval_repo.list_hits(retrieval_record_for_block.id)
+        assert len(hits_for_block) > 0  # docstring: 必须存在 hits 才能触发“有证据但不可验证引用”
+
+        null_excerpt_node_id = None
+        for h in hits_for_block:
+            ex = getattr(h, "excerpt", None)
+            if not isinstance(ex, str) or not ex.strip():
+                null_excerpt_node_id = str(getattr(h, "node_id"))
+                break
+        assert null_excerpt_node_id is not None  # docstring: 至少存在 1 条 excerpt 为空的 hit（用于触发 blocked）
+
+        async def _mock_run_generation_blocked(
+            *,
+            messages_snapshot: Mapping[str, Any],
+            model_provider: str,
+            model_name: str,
+            generation_config: Any = None,
+            **kwargs: Any,
+        ) -> Dict[str, Any]:
+            # docstring: 返回“看似有引用但不可验证”的 citations（指向 excerpt 为空的 hit）
+            response_text = (
+                "{"
+                '"answer":"mock answer (should be blocked)",'
+                f'"citations":[{{"node_id":"{null_excerpt_node_id}","rank":1,"quote":""}}]'
+                "}"
+            )
+            return {
+                "raw_text": response_text,
+                "provider": str(model_provider or "mock"),
+                "model": str(model_name or "mock"),
+                "usage": None,
+            }
+
+        # docstring: 临时覆盖 generation.run_generation，仅影响本 Case
+        prev_run_generation = generator_mod.run_generation
+        generator_mod.run_generation = _mock_run_generation_blocked
+        try:
+            response_gen_blocked = await chat(
+                session=session,
+                milvus_repo=repo,
+                query="Article",
+                conversation_id=response_success["conversation_id"],
+                user_id=user.id,
+                kb_id=kb.id,
+                chat_type="chat",
+                # docstring: evaluator 明确要求 citations，确保 evaluator 会 fail，从而验证“blocked 透传优先级”
+                context={**base_context, "evaluator_config": {"min_citations": 1}},
+                trace_context=TraceContext(),
+                debug=True,
+            )
+        finally:
+            generator_mod.run_generation = prev_run_generation  # docstring: 恢复 run_generation
+
+        assert response_gen_blocked.get("status") == "blocked"  # docstring: message.status 必须被映射为 blocked
+        assert response_gen_blocked.get("answer") == ""  # docstring: blocked answer 必须为空
+        assert response_gen_blocked.get("citations") == []  # docstring: blocked citations 必须为空
+
+        gen_blocked_debug = response_gen_blocked.get(DEBUG_KEY) or {}
+        _assert_debug_full(gen_blocked_debug)  # docstring: 此路径已执行 generation/evaluator，应为 full debug
+        assert (
+            gen_blocked_debug.get("gate", {}).get("generation", {}).get("status") == "blocked"
+        )  # docstring: generation gate blocked
+        assert gen_blocked_debug.get("gate", {}).get("evaluator", {}).get("status") in {
+            "pass",
+            "fail",
+            "partial",
+            "skipped",
+        }  # docstring: evaluator 可能 fail/partial（取决于规则集），但不影响 message.blocked
+
+        gen_blocked_msg = await msg_repo.get_by_id(response_gen_blocked["message_id"])  # docstring: 回查 message
+        assert gen_blocked_msg is not None
+        assert gen_blocked_msg.status == "blocked"  # docstring: DB message.status 必须为 blocked
+
         response_failed = await chat(
             session=session,
             milvus_repo=repo,
@@ -494,6 +576,9 @@ async def test_chat_service_gate(session: AsyncSession) -> None:
         assert response_failed.get("citations") == []  # docstring: failed citations 必须为空
         failed_debug = response_failed.get(DEBUG_KEY) or {}
         _assert_debug_full(failed_debug)  # docstring: failed debug 断言
+        assert (
+            failed_debug.get("gate", {}).get("generation", {}).get("status") != "blocked"
+        )  # docstring: Case D 是 evaluator fail 导致 failed，不应被 generation.blocked 抢占
         assert failed_debug.get("gate", {}).get("evaluator", {}).get("status") in {
             "fail",
             "skipped",

@@ -67,7 +67,7 @@ def _coerce_generation_status(value: Any) -> GenerationStatus:
     [下游关系] GenerationRecordView.status。
     """
     raw = str(value or "").strip().lower()
-    if raw in {"success", "partial", "failed"}:
+    if raw in {"success", "partial", "blocked", "failed"}:
         return cast(GenerationStatus, raw)  # docstring: 合法 status 直接返回
     return cast(GenerationStatus, "failed")  # docstring: 非法值回退 failed
 

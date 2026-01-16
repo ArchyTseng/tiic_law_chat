@@ -989,7 +989,14 @@ async def chat(
         await session.commit()  # docstring: 提交 evaluator 结果（可回放）
 
         # docstring: === final writeback & response ===
-        status = evaluator_result.mapped_message_status  # docstring: 映射最终 status
+        status = evaluator_result.mapped_message_status  # docstring: evaluator 映射状态
+
+        # --- generation blocked overrides final status ---
+        # docstring: generation "blocked" means "no verifiable citations", should not be treated as infra failure.
+        gen_status = getattr(getattr(generation_bundle, "record", None), "status", None)
+        if str(gen_status or "").strip().lower() == "blocked":
+            status = MESSAGE_STATUS_BLOCKED  # docstring: blocked > evaluator mapping
+
         answer_text = str(generation_bundle.answer or "").strip()  # docstring: answer 输出
         citations = _extract_generation_citations(generation_bundle)  # docstring: citations 输出
         if status not in {MESSAGE_STATUS_SUCCESS, MESSAGE_STATUS_PARTIAL}:

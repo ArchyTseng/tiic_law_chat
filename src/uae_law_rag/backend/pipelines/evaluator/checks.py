@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Iterable, List, Mapping, Optional, Sequence, TypedDict
+from typing import Any, Iterable, List, Mapping, Optional, Sequence, TypedDict, cast
 
 from uae_law_rag.backend.schemas.evaluator import CheckStatus, EvaluatorConfig, EvaluationCheck
 from uae_law_rag.backend.schemas.generation import Citation, GenerationRecord
@@ -366,6 +366,32 @@ def check_require_citations(*, input: EvaluatorInput) -> EvaluationCheck:
     [下游关系] evaluator pipeline 汇总门禁状态。
     """
     cfg = _normalize_config(input)  # docstring: 解析配置
+
+    # --- blocked is a gate outcome, not a model failure ---
+    if "generation_record" not in input:
+        # 可选：防御性检查（根据你的 contract 是否 guarantee 存在）
+        return _build_check(
+            name="require_citations",
+            status="fail",
+            message="missing generation_record in input",
+            detail={"required": True},
+        )
+
+    # --- blocked is a gate outcome, not a model failure ---
+    gen_status = None
+    try:
+        gen_record = cast(GenerationRecord, input["generation_record"])
+        gen_status = gen_record.status
+    except Exception:
+        gen_status = None
+    if str(gen_status or "").strip().lower() == "blocked":
+        return _build_check(
+            name="require_citations",
+            status="skipped",
+            message="generation blocked; skip require_citations",
+            detail={"required": True, "skipped_due_to": "blocked"},
+        )
+
     if not cfg.require_citations:
         return _build_check(
             name="require_citations",

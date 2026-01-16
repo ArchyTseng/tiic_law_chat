@@ -43,7 +43,18 @@ from . import postprocess as postprocess_mod
 from . import prompt as prompt_mod
 
 
-_STATUS_ORDER = {"success": 0, "partial": 1, "failed": 2}  # docstring: status 严重程度顺序
+# NOTE:
+# status order controls merge + normalization.
+# "blocked" means: retrieval has evidence, but generation produced no verifiable citations.
+# It is not an infrastructure failure, so MUST NOT be forced to "failed".
+
+# Example (adjust to your actual constants):
+_STATUS_ORDER = {
+    "success": 0,
+    "partial": 1,
+    "blocked": 2,
+    "failed": 3,
+}
 
 
 @dataclass(frozen=True)
@@ -416,6 +427,13 @@ async def run_generation_pipeline(
             hits=hits,
             config=cfg.postprocess_config,
         )  # docstring: 解析输出与 citations 对齐
+
+    messages_snapshot["postprocess_snapshot"] = {
+        "status": post_result.get("status"),
+        "error_message": post_result.get("error_message"),
+        "citations_count": len(post_result.get("citations") or []),
+        "answer_head": str(post_result.get("answer") or "")[:80],
+    }
 
     status = str(post_result.get("status") or "failed")  # docstring: postprocess 状态
     if gen_error:

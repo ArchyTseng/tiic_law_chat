@@ -224,6 +224,10 @@ def _build_evidence_item(
     }  # docstring: 证据定位快照
 
     excerpt = _pick_excerpt(hit, snapshot, max_chars=max_excerpt_chars)  # docstring: 提取证据文本
+
+    # --- drop empty evidence items (no excerpt) ---
+    if not excerpt or not str(excerpt).strip():
+        return None  # docstring: 无可用证据文本则不进入 evidence，避免模型引用空证据
     return {
         "rank": rank_out,
         "node_id": node_id,

@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .ids import GenerationRecordId, MessageId, NodeId, RetrievalRecordId
 
 
-GenerationStatus = Literal["success", "failed", "partial"]  # docstring: 生成状态（MVP 与 evaluator 对齐）
+GenerationStatus = Literal["success", "partial", "blocked", "failed"]  # docstring: 生成状态（MVP 与 evaluator 对齐）
 
 
 class Citation(BaseModel):

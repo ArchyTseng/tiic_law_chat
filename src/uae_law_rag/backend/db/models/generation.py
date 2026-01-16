@@ -107,7 +107,7 @@ class GenerationRecordModel(Base, TimestampMixin):
         String(32),
         nullable=False,
         default="success",
-        comment="生成状态（success/failed/partial）",  # docstring: gate tests 与错误处理
+        comment="生成状态（success/partial/blocked/failed）",  # docstring: 与 schemas/generation.py 对齐
     )
 
     error_message: Mapped[Optional[str]] = mapped_column(
