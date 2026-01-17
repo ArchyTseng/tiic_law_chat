@@ -203,13 +203,72 @@ curl -sS http://127.0.0.1:18000/api/records/retrieval/<RETRIEVAL_RECORD_ID> | py
 curl -sS http://127.0.0.1:18000/api/records/generation/<GENERATION_RECORD_ID> | python -m json.tool
 ```
 
+### 7.3 Evaluator：Keyword Recall（全文片段召回评估，用于 EvaluatorPanel）
+
+> **产品定义**：对每个 keyword，计算
+> - **GT（Ground Truth）**：在 `node.text` 中 substring 出现的节点集合（更贴近“前端展示原文片段”）
+> - **KW（System）**：系统实际 `keyword_recall(FTS)` 返回的节点集合
+> - 输出 `recall / precision / capped / missing_sample / extra_sample`（可直接驱动前端指标与抽样展示）
+
+#### 7.3.1 单关键词评估（最小可用）
+
+```bash
+curl -sS -X POST "http://127.0.0.1:18000/api/evaluator/keyword_recall" \
+  -H "Content-Type: application/json" \
+  --data-binary @- \
+| python -c 'import sys,json; d=json.load(sys.stdin); print("top-level keys:", sorted(d.keys())); m=(d.get("metrics") or []); print"metrics_n:", len(m));\
+kw=m[0] if m else {}; print(kw.get("keyword"), "gt=", kw.get("gt_total"), "kw=", kw.get("kw_total"), "recall=", kw.get("recall"), precision=", kw.get("precision"), "capped=", kw.get("capped"));\
+print("timing_ms:", d.get("timing_ms"));' <<'JSON'
+{
+  "kb_id": "default",
+  "raw_query": "Financing",
+  "keywords_list": ["Financing"],
+  "keyword_top_k": 200,
+  "allow_fallback": true,
+  "case_sensitive": false,
+  "sample_n": 10
+}
+JSON
+```
+
+#### 7.3.2 多关键词评估（EvaluatorPanel 批量模式）
+
+```bash
+curl -sS -X POST "http://127.0.0.1:18000/api/evaluator/keyword_recall" \
+  -H "Content-Type: application/json" \
+  --data-binary @- \
+| python -c 'import sys,json; d=json.load(sys.stdin); ms=d.get("metrics") or [];\
+print("metrics_n:", len(ms));\
+for m in ms:\
+  print(m.get("keyword"), "recall=", m.get("recall"), "precision=", m.get("precision"), "gt=", m.get("gt_total"), "kw=", m.get"kw_total"), "capped=", m.get("capped"));' <<'JSON'
+{
+  "kb_id": "default",
+  "raw_query": "I want to learn Abu Dhabi rental laws",
+  "keywords_list": ["Abu Dhabi", "rental", "real estate", "lease", "tenant", "landlord"],
+  "keyword_top_k": 200,
+  "allow_fallback": true,
+  "case_sensitive": false,
+  "sample_n": 5
+}
+JSON
+```
+
+#### 7.3.3 判定信号（建议门槛）
+
+* `metrics[].recall`：
+  * 对“知识库内存在的意义关键词”，期望 `≥ 0.99`
+* `metrics[].capped`：
+  * `true` 表示 `keyword_top_k` 可能截断导致 recall 假低（需要提高 top_k 或缩小 scope）
+* `missing_sample / extra_sample`：
+  * 用于前端抽样展示：哪些 GT 片段未被 FTS 找到 / 哪些 FTS 命中不属于 GT（token/substring 定义差异）
+
 ---
 
 ## 8. 一键重置套路（推荐）
 
 ```bash
 # reset db
-PYTHONPATH=src python -m uae_law_rag.backend.scripts.init_db --drop --seed
+PYTHONPATH=src python -m uae_law_rag.backend.scripts.init_db --drop --seed --rebuild-fts
 
 # reset milvus
 PYTHONPATH=src python -m uae_law_rag.backend.scripts.init_milvus \
