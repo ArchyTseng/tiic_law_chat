@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Mapping, Optional, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -233,6 +233,11 @@ async def run_retrieval_pipeline(
     ctx = ctx or PipelineContext.from_session(session)  # docstring: 统一 ctx 装配
     cfg = _normalize_config(config)  # docstring: 归一化配置
 
+    # docstring: Make output_fields auditable & consistent with vector_recall defaulting.
+    # NOTE: vector_mod._normalize_output_fields already defaults to DEFAULT_OUTPUT_FIELDS;
+    # we normalize once here so provider_snapshot reflects the real fields used at runtime.
+    effective_output_fields: List[str] = vector_mod._normalize_output_fields(cfg.output_fields)  # type: ignore[attr-defined]
+
     ctx.timing.reset()  # docstring: 清理上次 timing
     errors: Dict[str, str] = {}
 
@@ -269,7 +274,7 @@ async def run_retrieval_pipeline(
                     kb_scope=kb_scope,
                     query_vector=query_vector,
                     top_k=cfg.vector_top_k,
-                    output_fields=cfg.output_fields,
+                    output_fields=effective_output_fields,
                     metric_type=cfg.metric_type,
                     collection=cfg.collection,
                 )  # docstring: vector 召回
@@ -337,9 +342,11 @@ async def run_retrieval_pipeline(
             except Exception:
                 effective_rerank_strategy = str(cfg.rerank_strategy)
 
+    cfg_for_snapshot = replace(cfg, output_fields=effective_output_fields)
+
     provider_snapshot = _build_provider_snapshot(
         base_snapshot=dict(ctx.provider_snapshot),
-        cfg=cfg,
+        cfg=cfg_for_snapshot,
         kb_id=kb_id,
         errors=errors,
     )  # docstring: provider 快照
