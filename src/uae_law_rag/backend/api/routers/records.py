@@ -46,6 +46,27 @@ from uae_law_rag.backend.utils.errors import NotFoundError
 router = APIRouter(prefix="/records", tags=["records"])  # docstring: records 路由前缀
 
 
+def _stable_locator(
+    *,
+    page: Optional[int],
+    start_offset: Optional[int],
+    end_offset: Optional[int],
+    article_id: Optional[str],
+    section_path: Optional[str],
+    source: Optional[str],
+) -> Dict[str, Any]:
+    if page == 0:
+        page = None
+    return {
+        "page": page,
+        "start_offset": start_offset,
+        "end_offset": end_offset,
+        "article_id": article_id,
+        "section_path": section_path,
+        "source": source,
+    }
+
+
 def _coerce_hit_source(value: Any) -> HitSource:
     """
     [职责] 规范 hit source（keyword/vector/fused/reranked）。
@@ -105,16 +126,15 @@ def _build_locator_from_hit(hit: Any) -> Dict[str, Any]:
     [上游关系] retrieval 映射调用。
     [下游关系] HitSummary.locator。
     """
-    locator: Dict[str, Any] = {}
-    page = getattr(hit, "page", None)
-    if page is not None:
-        locator["page"] = page  # docstring: 页码定位
-    start_offset = getattr(hit, "start_offset", None)
-    if start_offset is not None:
-        locator["start_offset"] = start_offset  # docstring: 起始偏移定位
-    end_offset = getattr(hit, "end_offset", None)
-    if end_offset is not None:
-        locator["end_offset"] = end_offset  # docstring: 结束偏移定位
+    node = getattr(hit, "node", None)
+    locator = _stable_locator(
+        page=getattr(hit, "page", None),
+        start_offset=getattr(hit, "start_offset", None),
+        end_offset=getattr(hit, "end_offset", None),
+        article_id=getattr(node, "article_id", None) if node else None,
+        section_path=getattr(node, "section_path", None) if node else None,
+        source=getattr(hit, "source", None),
+    )
     return locator  # docstring: 返回 locator
 
 

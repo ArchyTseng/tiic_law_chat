@@ -9,12 +9,13 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Dict
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.retrieval import RetrievalHitModel, RetrievalRecordModel
+from ..models.doc import NodeModel
 
 
 class RetrievalRepo:
@@ -76,21 +77,69 @@ class RetrievalRepo:
         hits: list of dict with keys: node_id, source, rank, score, score_details, excerpt(optional),
               page(optional), start_offset(optional), end_offset(optional)
         """  # docstring: 记录每个证据命中（白箱证据链）
+        # --- batch fetch nodes for fallback snapshots (excerpt/page/offset) ---
+        node_ids: List[str] = []
+        for h in hits:
+            nid = str(h.get("node_id") or "").strip()
+            if nid:
+                node_ids.append(nid)
+        node_map: Dict[str, NodeModel] = {}
+        if node_ids:
+            q = select(NodeModel).where(NodeModel.id.in_(list(dict.fromkeys(node_ids))))
+            res = await self._session.execute(q)
+            nodes = list(res.scalars().all())
+            node_map = {str(n.id): n for n in nodes}
+
+        def _truncate(s: Optional[str], *, max_chars: int = 800) -> Optional[str]:
+            if not s:
+                return None
+            s2 = str(s).strip()
+            if not s2:
+                return None
+            return s2[:max_chars]
+
         objs: List[RetrievalHitModel] = []
         for h in hits:
+            node_id = str(h["node_id"])
+            n = node_map.get(node_id)
+
+            # excerpt fallback: prefer upstream excerpt; else use node text/content
+            excerpt = h.get("excerpt")
+            if not excerpt and n is not None:
+                # try common node text fields; pick the one your NodeModel actually has
+                node_text = getattr(n, "text", None) or getattr(n, "content", None)
+                excerpt = _truncate(node_text, max_chars=800)
+
+            page = h.get("page")
+            if page in (0, "0"):
+                page = None
+            if page is None and n is not None:
+                page = getattr(n, "page", None)
+                if page == 0:
+                    page = None
+
+            start_offset = h.get("start_offset")
+            if start_offset is None and n is not None:
+                start_offset = getattr(n, "start_offset", None)
+
+            end_offset = h.get("end_offset")
+            if end_offset is None and n is not None:
+                end_offset = getattr(n, "end_offset", None)
+
             obj = RetrievalHitModel(
-                retrieval_record_id=retrieval_record_id,  # docstring: 归属检索记录
-                node_id=str(h["node_id"]),  # docstring: 证据节点ID
-                source=str(h.get("source", "fused")),  # docstring: hit 来源
-                rank=int(h["rank"]),  # docstring: 排名
-                score=float(h.get("score", 0.0)),  # docstring: 综合分
-                score_details=h.get("score_details") or {},  # docstring: 分数细节
-                excerpt=h.get("excerpt"),  # docstring: 命中摘要（可选）
-                page=h.get("page"),  # docstring: 页码快照（可选）
-                start_offset=h.get("start_offset"),  # docstring: 起始偏移快照（可选）
-                end_offset=h.get("end_offset"),  # docstring: 结束偏移快照（可选）
+                retrieval_record_id=retrieval_record_id,
+                node_id=node_id,
+                source=str(h.get("source", "fused")),
+                rank=int(h["rank"]),
+                score=float(h.get("score", 0.0)),
+                score_details=h.get("score_details") or {},
+                excerpt=excerpt,
+                page=page,
+                start_offset=start_offset,
+                end_offset=end_offset,
             )
             objs.append(obj)
+
         self._session.add_all(objs)
         await self._session.flush()
         return objs

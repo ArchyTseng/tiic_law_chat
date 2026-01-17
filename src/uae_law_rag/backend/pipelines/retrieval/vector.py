@@ -148,6 +148,15 @@ def _hit_to_candidate(
     [上游关系] vector_recall 调用。
     [下游关系] 返回 Candidate 供 fusion/rerank/persist 使用。
     """
+
+    def _pick_excerpt(payload: Dict[str, Any]) -> Optional[str]:
+        # Only attempt keys that might realistically exist; otherwise keep None.
+        for k in ("excerpt",):  # keep contract minimal; text is joined from SQL Node later
+            v = payload.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        return None
+
     payload = hit.get("payload") or {}  # docstring: Milvus payload
     node_id = payload.get(NODE_ID_FIELD) or payload.get("node_id")  # docstring: 证据节点ID
     if not node_id:
@@ -171,12 +180,14 @@ def _hit_to_candidate(
         "vector_id": vector_id,
     }  # docstring: 可解释分数细节
 
+    excerpt = _pick_excerpt(payload)
+
     return Candidate(
         node_id=str(node_id),  # docstring: 节点ID
         stage="vector",  # docstring: 标记 vector 阶段
         score=norm_score,  # docstring: 归一化分数
         score_details=score_details,  # docstring: 分数细节快照
-        excerpt=None,  # docstring: 向量召回无 snippet
+        excerpt=excerpt,  # docstring: best-effort excerpt from payload fields
         page=_normalize_page(payload.get(PAGE_FIELD)),  # docstring: 页码快照
         start_offset=_coerce_int(payload.get("start_offset")),  # docstring: 起始偏移（如有）
         end_offset=_coerce_int(payload.get("end_offset")),  # docstring: 结束偏移（如有）
