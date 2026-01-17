@@ -15,6 +15,7 @@ from uae_law_rag.backend.api.routers.chat import router as chat_router
 from uae_law_rag.backend.api.routers.health import router as health_router
 from uae_law_rag.backend.api.routers.ingest import router as ingest_router
 from uae_law_rag.backend.api.routers.records import router as records_router
+from uae_law_rag.backend.api.routers.evaluator import router as evaluator_router
 
 
 def create_app() -> FastAPI:
@@ -28,6 +29,7 @@ def create_app() -> FastAPI:
     app.include_router(ingest_router, prefix="/api", tags=["ingest"])
     app.include_router(records_router, prefix="/api", tags=["records"])
     app.include_router(admin_router, prefix="/api", tags=["admin"])
+    app.include_router(evaluator_router, prefix="/api", tags=["evaluator"])
 
     return app
 
