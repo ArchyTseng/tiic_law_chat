@@ -93,6 +93,22 @@ def _filter_kwargs(fn: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in kwargs.items() if k in sig.parameters}  # docstring: 保留受支持参数
 
 
+def _normalize_generation_config(*, provider_key: str, cfg: Mapping[str, Any]) -> Dict[str, Any]:
+    """
+    [职责] generation_config 归一化：为特定 provider 注入确定性默认值。
+    [边界] 仅做缺省填充；不覆盖用户显式配置。
+    [上游关系] _resolve_llm/_call_llm 调用。
+    [下游关系] LLM init/chat kwargs。
+    """
+    out = dict(cfg or {})
+    if provider_key == "ollama":
+        # docstring: 确定性输出优先，避免 JSON 格式漂移
+        out.setdefault("temperature", 0)
+        out.setdefault("top_p", 1)
+        out.setdefault("num_predict", 256)
+    return out
+
+
 def _normalize_provider(provider: str) -> str:
     """
     [职责] 规范化 provider 字符串。
@@ -455,6 +471,9 @@ async def run_generation(
     if not isinstance(messages_snapshot, Mapping):
         raise TypeError("messages_snapshot must be a mapping")  # docstring: 强制类型
 
+    provider_key = _normalize_provider(model_provider)
+    cfg = _normalize_generation_config(provider_key=provider_key, cfg=(generation_config or {}))
+
     messages_payload = _normalize_messages_snapshot(messages_snapshot)  # docstring: 解析 messages 列表
     if not messages_payload:
         raise ValueError("messages_snapshot missing messages")  # docstring: messages 必填
@@ -462,14 +481,12 @@ async def run_generation(
     llm = _resolve_llm(
         provider=model_provider,
         model_name=model_name,
-        generation_config=generation_config,
+        generation_config=cfg,
         messages_snapshot=messages_snapshot,
     )  # docstring: 构造 LLM
 
     chat_messages = _build_chat_messages(messages_payload)  # docstring: 构造 ChatMessage 列表
-    response = await _call_llm(
-        llm=llm, messages=chat_messages, generation_config=generation_config
-    )  # docstring: 执行 LLM
+    response = await _call_llm(llm=llm, messages=chat_messages, generation_config=cfg)  # docstring: 执行 LLM
 
     raw_text = _extract_text(response)  # docstring: 提取 raw_text
     usage = _extract_usage(response)  # docstring: 提取 usage
@@ -479,6 +496,7 @@ async def run_generation(
     return {
         "raw_text": str(raw_text or ""),  # docstring: LLM 原始输出
         "provider": output_provider,  # docstring: provider 快照
+        "generation_config": cfg,  # docstring: 新增 generation_config 快照
         "model": output_model,  # docstring: model 快照
         "usage": usage,  # docstring: usage 快照
     }

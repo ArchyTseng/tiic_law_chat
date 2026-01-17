@@ -137,6 +137,7 @@ class GenerationRecordView(BaseModel):
     status: GenerationStatus = Field(default="success")  # docstring: 生成状态
     answer: Optional[str] = Field(default=None)  # docstring: 生成答案（可选）
     citations: List[CitationView] = Field(default_factory=list)  # docstring: 引用摘要列表
+    output_raw: Optional[str] = Field(default=None)  # docstring: 生成答案（可选）
 
 
 class EvaluationCheckSummary(BaseModel):

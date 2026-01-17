@@ -332,13 +332,21 @@ async def get_generation_record(
             request_id=str(trace_context.request_id),
         )  # docstring: 异常映射为 ErrorResponse
 
-    return GenerationRecordView(
+    structured = record.output_structured or {}
+    answer_struct = ""
+    if isinstance(structured, dict):
+        answer_struct = str(structured.get("answer") or "").strip()
+
+    resp = GenerationRecordView(
         generation_record_id=GenerationRecordId(str(record.id)),
         message_id=MessageId(str(record.message_id)),
         status=_coerce_generation_status(record.status),
-        answer=str(record.output_raw) if record.output_raw is not None else None,
+        answer=answer_struct,
         citations=_build_citations(record.citations),
+        output_raw=str(record.output_raw) if record.output_raw is not None else None,
     )  # docstring: 返回生成记录视图
+
+    return resp
 
 
 @router.get("/evaluation/{evaluation_record_id}", response_model=EvaluationRecordView)

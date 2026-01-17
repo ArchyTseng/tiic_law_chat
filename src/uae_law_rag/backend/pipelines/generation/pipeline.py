@@ -57,6 +57,18 @@ _STATUS_ORDER = {
     "failed": 3,
 }
 
+RETRY_HINT_PARSE = (
+    "Your previous output was invalid JSON. "
+    "Return a SINGLE valid JSON object only with keys: answer, citations. "
+    "Do not wrap in markdown. Do not include any extra text."
+)
+
+RETRY_HINT_CIT = (
+    "Your previous output had no valid citations. "
+    "You MUST include at least 1 citation with node_id from VALID NODE IDS. "
+    "Return JSON only."
+)
+
 
 @dataclass(frozen=True)
 class _GenerationConfig:
@@ -411,7 +423,9 @@ async def run_generation_pipeline(
                     node_snapshots=cfg.node_snapshots,
                     model_provider=str(gen_result.get("provider") or cfg.model_provider),
                     model_name=str(gen_result.get("model") or cfg.model_name),
-                    generation_config=cfg.generation_config,
+                    generation_config=gen_result["generation_config"]
+                    if gen_result["generation_config"]
+                    else cfg.generation_config,
                     postprocess_config=cfg.postprocess_config,
                     no_evidence_answer=cfg.no_evidence_answer,
                     no_evidence_status=cfg.no_evidence_status,
@@ -447,6 +461,58 @@ async def run_generation_pipeline(
         "citations_count": len(post_result.get("citations") or []),
         "answer_head": str(post_result.get("answer") or "")[:80],
     }
+
+    need_retry = False
+    retry_hint = None
+    err = str(post_result.get("error_message") or "")
+
+    if "json parse error" in err or "json object not found" in err or "empty_output" in err:
+        need_retry = True
+        retry_hint = RETRY_HINT_PARSE
+    elif str(post_result.get("status")) == "blocked" and "no valid citations" in err:
+        need_retry = True
+        retry_hint = RETRY_HINT_CIT
+
+    if need_retry and retry_hint:
+        with ctx.timing.stage("llm_retry"):
+            # append retry hint as an extra user turn
+            retry_messages = list(messages_snapshot.get("messages") or [])
+            retry_messages.append({"role": "user", "content": retry_hint})
+
+            # call llm again (same provider)
+            retry_result = await generator_mod.run_generation(
+                messages_snapshot={**messages_snapshot, "messages": retry_messages},
+                model_provider=cfg.model_provider,
+                model_name=cfg.model_name,
+                generation_config=cfg.generation_config,
+            )
+            retry_raw_text = retry_result["raw_text"]
+            retry_usage = retry_result["usage"]
+
+            retry_post_result = postprocess_mod.postprocess_generation(
+                raw_text=retry_raw_text, hits=hits, config=cfg.postprocess_config
+            )
+            retry_err = str(retry_post_result.get("error_message") or "")
+
+        # choose retry if better
+        if retry_post_result.get("status") == "success":
+            raw_text = str(retry_raw_text or "")
+            post_result = retry_post_result
+            gen_usage = retry_usage
+            # NOTE: do NOT touch gen_error here
+            messages_snapshot["llm_retry"] = {
+                "used": True,
+                "reason": err,
+                "retry_error_message": retry_err or None,
+                "retry_status": str(retry_post_result.get("status") or ""),
+            }
+        else:
+            messages_snapshot["llm_retry"] = {
+                "used": True,
+                "reason": err,
+                "retry_error_message": retry_err or None,
+                "retry_status": str(retry_post_result.get("status") or ""),
+            }
 
     status = str(post_result.get("status") or "failed")  # docstring: postprocess 状态
     if gen_error:
