@@ -30,6 +30,37 @@ def _http_json(
         return json.loads(raw)
 
 
+def _pick_node_id_from_retrieval(record: Any) -> Optional[str]:
+    """
+    [职责] 从 /api/records/retrieval/{id} 响应中挑一个 node_id。
+    [边界] 优先 reranked/fused/vector/keyword；找不到则返回 None。
+    """
+    if not isinstance(record, dict):
+        return None
+    # prefer grouped hits_by_source if present
+    hits_by_source = record.get("hits_by_source")
+    if isinstance(hits_by_source, dict):
+        for k in ("reranked", "fused", "vector", "keyword"):
+            arr = hits_by_source.get(k)
+            if isinstance(arr, list) and arr:
+                nid = (arr[0] or {}).get("node_id")
+                if nid:
+                    return str(nid)
+        # any source
+        for _, arr in hits_by_source.items():
+            if isinstance(arr, list) and arr:
+                nid = (arr[0] or {}).get("node_id")
+                if nid:
+                    return str(nid)
+    # fallback flat hits
+    hits = record.get("hits")
+    if isinstance(hits, list) and hits:
+        nid = (hits[0] or {}).get("node_id")
+        if nid:
+            return str(nid)
+    return None
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     p = argparse.ArgumentParser(description="FastAPI gate: page replay endpoint.")
     p.add_argument("--base-url", default=DEFAULT_BASE_URL)
@@ -41,32 +72,42 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = p.parse_args(list(argv) if argv is not None else None)
 
     try:
-        # 1) call keyword_recall_auto_detail to get a node_id sample
-        url_auto = f"{str(args.base_url).rstrip('/')}/api/evaluator/keyword_recall_auto_detail"
-        auto = _http_json(
-            url_auto,
+        # 1) call chat(debug=true) to obtain citations/retrieval_record_id (most realistic replay chain)
+        url_chat = f"{str(args.base_url).rstrip('/')}/api/chat"
+        chat = _http_json(
+            url_chat,
             method="POST",
             headers={"x-user-id": str(args.user_id)},
-            payload={
-                "kb_id": str(args.kb_id),
-                "raw_query": str(args.query),
-                "sample_n": 5,
-            },
+            payload={"kb_id": str(args.kb_id), "query": str(args.query), "debug": True},
             timeout_s=int(args.timeout_s),
         )
 
-        node_id = None
-        for m in (auto or {}).get("metrics") or []:
-            miss = (m or {}).get("missing_sample") or []
-            extra = (m or {}).get("extra_sample") or []
-            if miss:
-                node_id = miss[0]
-                break
-            if extra:
-                node_id = extra[0]
-                break
+        node_id: Optional[str] = None
+        citations = (chat or {}).get("citations")
+        if isinstance(citations, list) and citations:
+            node_id = str((citations[0] or {}).get("node_id") or "").strip() or None
+
+        retrieval_record_id: Optional[str] = None
+        debug = (chat or {}).get("debug") if isinstance(chat, dict) else None
+        if isinstance(debug, dict):
+            records = debug.get("records")
+            if isinstance(records, dict):
+                rid = records.get("retrieval_record_id")
+                retrieval_record_id = str(rid).strip() if rid else None
+
+        if not node_id and retrieval_record_id:
+            url_rr = f"{str(args.base_url).rstrip('/')}/api/records/retrieval/{retrieval_record_id}"
+            rr = _http_json(
+                url_rr,
+                method="GET",
+                headers={"x-user-id": str(args.user_id)},
+                payload=None,
+                timeout_s=int(args.timeout_s),
+            )
+            node_id = _pick_node_id_from_retrieval(rr)
+
         if not node_id:
-            print("[page_replay_gate] ERROR: no sample node_id from keyword_recall_auto_detail", file=sys.stderr)
+            print("[page_replay_gate] ERROR: no node_id from chat citations or retrieval record", file=sys.stderr)
             return 2
 
         # 2) node preview -> get document_id + page
@@ -108,7 +149,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if bool(args.json):
             print(
                 json.dumps(
-                    {"ok": ok, "node_id": node_id, "document_id": document_id, "page": int(page)}, ensure_ascii=False
+                    {
+                        "ok": ok,
+                        "node_id": node_id,
+                        "document_id": document_id,
+                        "page": int(page),
+                        "retrieval_record_id": retrieval_record_id,
+                    },
+                    ensure_ascii=False,
                 )
             )
 
