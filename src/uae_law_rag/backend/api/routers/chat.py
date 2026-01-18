@@ -51,6 +51,7 @@ from uae_law_rag.backend.utils.constants import (
     TRACE_ID_KEY,
 )
 from uae_law_rag.backend.pipelines.evaluator.query_plan import build_query_plan  # type: ignore
+from uae_law_rag.backend.pipelines.evaluator.keyword_recall import evaluate_keyword_recall  # type: ignore
 
 
 router = APIRouter(prefix="/chat", tags=["chat"])  # docstring: chat 路由前缀
@@ -198,16 +199,61 @@ async def chat_endpoint(
     )  # docstring: 读取 debug payload
     debug_envelope: Optional[ChatDebugEnvelope] = None
     if isinstance(debug_payload, dict):
-        # docstring: 仅在 debug 模式下注入 query_plan（不改变主链路检索参数与返回结构）
+        # docstring: debug=true 时注入 keyword_stats（query_plan -> keyword_recall），用于解释“关键词命中/覆盖”
         if debug_enabled:
-            kb_id_for_plan = str(request.kb_id or "default").strip() or "default"
-            plan = build_query_plan(raw_query=str(request.query), kb_id=kb_id_for_plan)
-            debug_payload["query_plan"] = {
-                "raw_query": plan.raw_query,
-                "keywords_list": list(plan.keywords_list),
-                "enhanced_queries": list(plan.enhanced_queries),
-                "meta": dict(plan.meta),
-            }
+            try:
+                kb_id_for_stats = str(request.kb_id or "default").strip() or "default"
+                plan = build_query_plan(raw_query=str(request.query), kb_id=kb_id_for_stats)
+
+                stats_result = await evaluate_keyword_recall(
+                    session=session,
+                    kb_id=str(kb_id_for_stats),
+                    raw_query=str(request.query),
+                    keywords=list(plan.keywords_list),
+                    keyword_top_k=None,  # docstring: 使用 evaluator 默认（与服务一致：200）
+                    allow_fallback=True,
+                    case_sensitive=False,
+                    sample_n=0,  # docstring: debug 统计默认不返回 sample，避免 payload 膨胀
+                    trace_id=str(getattr(trace_context, "trace_id", "") or ""),
+                    request_id=str(getattr(trace_context, "request_id", "") or ""),
+                )
+
+                # docstring: 生成轻量统计结构（面向前端折叠面板）
+                items = []
+                for m in list(stats_result.get("metrics") or []):
+                    # m 是 KeywordRecallMetricView（pydantic），可直接 model_dump
+                    md = m.model_dump()
+                    items.append(
+                        {
+                            "keyword": md.get("keyword"),
+                            "gt_total": md.get("gt_total"),
+                            "kw_total": md.get("kw_total"),
+                            "overlap": md.get("overlap"),
+                            "recall": md.get("recall"),
+                            "precision": md.get("precision"),
+                            "capped": md.get("capped"),
+                        }
+                    )
+
+                debug_payload["keyword_stats"] = {
+                    "raw_query": str(request.query),
+                    "keywords_list": list(plan.keywords_list),
+                    "items": items,
+                    "timing_ms": dict(stats_result.get("timing_ms") or {}),
+                    "meta": {
+                        "strategy": str((plan.meta or {}).get("strategy") or "rule_v1"),
+                        "kb_id": kb_id_for_stats,
+                    },
+                }
+            except Exception as _exc:
+                # docstring: keyword_stats 仅用于 debug 解释层；失败不应影响 chat 主链路
+                debug_payload["keyword_stats"] = {
+                    "raw_query": str(request.query),
+                    "keywords_list": [],
+                    "items": [],
+                    "timing_ms": {},
+                    "meta": {"error": str(_exc)},
+                }
 
         debug_envelope = _build_debug_envelope(
             trace_id=trace_id,
