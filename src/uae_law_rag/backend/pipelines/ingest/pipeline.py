@@ -93,7 +93,79 @@ async def run_ingest_pdf(
     with ctx.timing.stage("idempotency"):
         existing = await ingest_repo.get_file_by_sha256(kb_id=kb_id, sha256=sha256)  # docstring: 幂等判定
     if existing is not None and existing.ingest_status == "success":
+        # docstring: idempotency fast-path, but MUST ensure replay artifacts exist (P2-0e)
         document_id = await _get_document_id_by_file_id(session=session, file_id=existing.id)  # docstring: 回查文档
+        doc_row = (
+            (await session.execute(select(DocumentModel).where(DocumentModel.id == document_id))).scalars().first()
+        )
+        if doc_row is None:
+            raise ValueError(f"document not found for file_id={existing.id}")  # docstring: DB 状态异常
+
+        # docstring: check replay pointer
+        try:
+            meta_doc = dict(getattr(doc_row, "meta_data", {}) or {})
+        except Exception:
+            meta_doc = {}
+
+        md_path_raw = str(meta_doc.get("parsed_markdown_path") or "").strip()
+        md_path_ok = False
+        if md_path_raw:
+            try:
+                p = Path(md_path_raw).expanduser().resolve()
+                md_path_ok = bool(p.exists() and p.is_file())
+            except Exception:
+                md_path_ok = False
+
+        # docstring: backfill parsed markdown if missing or file not found
+        if not md_path_ok:
+            # Resolve source pdf from DB (prefer knowledge_file.source_uri)
+            src_uri = str(getattr(existing, "source_uri", "") or "").strip()
+            src_pdf_path = ""
+            if src_uri.startswith("file://"):
+                src_pdf_path = src_uri.replace("file://", "", 1).strip()
+            else:
+                src_pdf_path = src_uri
+
+            if not src_pdf_path:
+                # fallback to input pdf_path (should be absolute)
+                src_pdf_path = str(pdf_file)
+
+            src_pdf = Path(src_pdf_path).expanduser().resolve()
+            if not src_pdf.exists() or not src_pdf.is_file():
+                raise FileNotFoundError(
+                    f"source pdf not found for replay backfill: {src_pdf}"
+                )  # docstring: 回放资产必须可重建
+
+            # parse again (ONLY parse; do NOT segment/embed/milvus)
+            with ctx.timing.stage("parse_backfill"):
+                parsed = await pdf_parse_mod.parse_pdf(
+                    pdf_path=str(src_pdf), parser_name=parser_name, parse_version=parse_version
+                )
+
+            try:
+                md_text = str((parsed or {}).get("markdown") or "")
+            except Exception:
+                md_text = ""
+            if not md_text.strip():
+                raise ValueError("parse produced empty markdown (backfill)")  # docstring: 禁止空 markdown
+
+            parsed_md_path = get_parsed_markdown_path(kb_id=kb_id, file_id=str(existing.id))
+            write_text_atomic(parsed_md_path, md_text)
+
+            # Update document meta pointer
+            meta_doc["parsed_markdown_path"] = str(parsed_md_path)
+            try:
+                parsed_pages = _infer_pages(parsed)
+            except Exception:
+                parsed_pages = None
+            if parsed_pages is not None:
+                meta_doc["pages"] = int(parsed_pages)
+            doc_row.meta_data = meta_doc
+            await session.flush()
+
+            # docstring: ctx records
+            ctx.meta["parsed_markdown_path"] = str(parsed_md_path)
+
         stmt = select(func.count(NodeVectorMapModel.id)).where(NodeVectorMapModel.file_id == existing.id)
         vector_count = int((await session.execute(stmt)).scalar() or 0)
         return IngestResult(

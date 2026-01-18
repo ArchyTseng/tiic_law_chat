@@ -38,6 +38,7 @@ from uae_law_rag.backend.pipelines.ingest import pdf_parse as pdf_parse_mod
 from uae_law_rag.backend.pipelines.ingest import persist_db as persist_db_mod
 from uae_law_rag.backend.pipelines.ingest import persist_milvus as persist_milvus_mod
 from uae_law_rag.backend.pipelines.ingest import segment as segment_mod
+from uae_law_rag.backend.pipelines.ingest import pipeline as pipeline_mod
 from uae_law_rag.backend.schemas.audit import TraceContext
 from uae_law_rag.backend.utils.constants import (
     DEBUG_KEY,
@@ -56,6 +57,7 @@ from uae_law_rag.backend.utils.errors import (
     PipelineError,
 )
 from uae_law_rag.backend.utils.logging_ import get_logger, log_event, truncate_text
+from uae_law_rag.backend.utils.artifacts import get_parsed_markdown_path, write_text_atomic
 
 INGEST_STATUS_PENDING = "pending"
 INGEST_STATUS_SUCCESS = "success"
@@ -332,12 +334,52 @@ async def ingest_file(
         and existing is not None
         and str(getattr(existing, "ingest_status", "") or "").lower() == INGEST_STATUS_SUCCESS
     ):
+        # docstring: idempotent fast-path MUST still support page replay
+        document_id = await pipeline_mod._get_document_id_by_file_id(session=session, file_id=str(existing.id))
+
+        # docstring: ensure parsed markdown exists (backfill if missing)
+        doc_row = await ctx.ingest_repo.get_document(document_id)  # or DocumentRepo(session).get_document(...)
+        meta_doc = dict(getattr(doc_row, "meta_data", {}) or {}) if doc_row is not None else {}
+        md_path_raw = str(meta_doc.get("parsed_markdown_path") or "").strip()
+        md_ok = False
+        if md_path_raw:
+            try:
+                p = Path(md_path_raw).expanduser().resolve()
+                md_ok = bool(p.exists() and p.is_file())
+            except Exception:
+                md_ok = False
+
+        if not md_ok:
+            # docstring: backfill by re-parse only (no re-seg/embed/milvus)
+            with ctx.timing.stage("parse_backfill"):
+                parsed = await pdf_parse_mod.parse_pdf(
+                    pdf_path=str(pdf_path),
+                    parser_name=profile["parser"],
+                    parse_version=profile["parse_version"],
+                )
+            md_text = str((parsed or {}).get("markdown") or "")
+            if not md_text.strip():
+                raise ValueError("parse produced empty markdown (backfill)")
+            parsed_md_path = get_parsed_markdown_path(kb_id=kb_id, file_id=str(existing.id))
+            write_text_atomic(parsed_md_path, md_text)
+            meta_doc["parsed_markdown_path"] = str(parsed_md_path)
+            try:
+                pages = _infer_pages(parsed)
+            except Exception:
+                pages = None
+            if pages is not None:
+                meta_doc["pages"] = int(pages)
+            if doc_row is not None:
+                doc_row.meta_data = meta_doc
+                await session.flush()
+                await session.commit()
+
         timing_ms = ctx.timing_ms(total_key=TIMING_TOTAL_MS_KEY)  # docstring: 幂等分支 timing
         debug_payload = (
             _build_debug_payload(
                 state=STATE_PENDING,
                 sha256=sha256,
-                document_id=None,
+                document_id=document_id,
                 node_ids=[],
                 vector_ids=[],
             )
@@ -545,6 +587,14 @@ async def ingest_file(
                 parse_version=profile["parse_version"],
             )  # docstring: PDF -> Markdown
 
+        # docstring: persist parsed markdown for page replay (P2-0e)
+        md_text = str((parsed or {}).get("markdown") or "")
+        if not md_text.strip():
+            raise ValueError("parse produced empty markdown")
+        parsed_md_path = get_parsed_markdown_path(kb_id=kb_id, file_id=str(file_id))
+        write_text_atomic(parsed_md_path, md_text)
+        ctx.meta["parsed_markdown_path"] = str(parsed_md_path)
+
         parsed_pages = _infer_pages(parsed)  # docstring: 解析页数
         if parsed_pages is not None:
             file_row.pages = parsed_pages  # docstring: 回填页数
@@ -596,6 +646,21 @@ async def ingest_file(
                 meta_data={"parser": profile["parser"], "parse_version": profile["parse_version"]},
             )  # docstring: 落库 Document + Nodes
         document_id = str(doc.id)  # docstring: 文档 ID 记录
+
+        # docstring: write replay pointer into Document meta_data (P2-0e)
+        try:
+            meta_doc = dict(getattr(doc, "meta_data", {}) or {})
+        except Exception:
+            meta_doc = {}
+        meta_doc["parsed_markdown_path"] = str(parsed_md_path)
+        meta_doc["source_uri"] = str(source_uri)
+        meta_doc["sha256"] = str(sha256)
+        if parsed_pages is not None:
+            meta_doc["pages"] = int(parsed_pages)
+        if "language" not in meta_doc:
+            meta_doc["language"] = "en"  # docstring: reserved for bilingual alignment
+        doc.meta_data = meta_doc
+        await session.flush()
 
         nodes_out = sorted(
             list(nodes_out), key=lambda n: int(getattr(n, "node_index", 0))
