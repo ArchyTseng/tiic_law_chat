@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from sqlite3 import InternalError
 from typing import Any, Dict, List, Optional, Set, cast
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from uae_law_rag.backend.api.deps import get_session, get_trace_context
 from uae_law_rag.backend.api.errors import to_json_response
@@ -45,9 +45,10 @@ from uae_law_rag.backend.api.schemas_http.records import (
     NodeRecordView,
 )
 from uae_law_rag.backend.api.schemas_http.records_page import PageRecordView
+from uae_law_rag.backend.db.models import NodeModel
 from uae_law_rag.backend.db.repo import EvaluatorRepo, GenerationRepo, RetrievalRepo, NodeRepo, DocumentRepo
 from uae_law_rag.backend.schemas.audit import TraceContext
-from uae_law_rag.backend.utils.errors import NotFoundError
+from uae_law_rag.backend.utils.errors import NotFoundError, InternalError
 from uae_law_rag.backend.utils.artifacts import read_text  # type: ignore
 
 
@@ -75,6 +76,65 @@ def _split_markdown_by_page(md: str) -> dict[int, str]:
         chunk = text[start:end].strip()
         pages[page_no] = chunk
     return pages
+
+
+async def _read_page_record(
+    *,
+    session: AsyncSession,
+    document_id: str,
+    page: int,
+    kb_id: Optional[str],
+    max_chars: int,
+) -> "PageRecordView":
+    repo = DocumentRepo(session)
+
+    doc = await repo.get_document(str(document_id))
+    if doc is None:
+        raise NotFoundError(message="document not found")
+
+    if kb_id is not None and str(getattr(doc, "kb_id", "") or "").strip() != str(kb_id).strip():
+        raise NotFoundError(message="document not found in kb scope")
+
+    file_id = str(getattr(doc, "file_id", "") or "").strip()
+    if not file_id:
+        raise InternalError(message="document missing file_id")
+
+    file_row = await repo.get_file(file_id)
+    pages_total = int(getattr(file_row, "pages", 0) or 0) or None
+
+    meta_doc = dict(getattr(doc, "meta_data", {}) or {})
+    md_path_raw = str(meta_doc.get("parsed_markdown_path") or "").strip()
+    if not md_path_raw:
+        raise NotFoundError(message="parsed markdown not available (re-ingest required)")
+
+    md_path = Path(md_path_raw).expanduser().resolve()
+    if not md_path.exists() or not md_path.is_file():
+        raise NotFoundError(message="parsed markdown file not found on disk")
+
+    md_text = read_text(md_path)
+    pages_map = _split_markdown_by_page(md_text)
+    if int(page) not in pages_map:
+        raise NotFoundError(message=f"page not found: {int(page)}")
+
+    content = pages_map[int(page)]
+    if max_chars > 0 and len(content) > int(max_chars):
+        content = content[: int(max_chars)]
+
+    meta: dict[str, Any] = {
+        "parsed_markdown_path": str(md_path),
+        "has_page_marks": bool(_PAGE_MARK_RE.search(md_text)),
+    }
+
+    return PageRecordView(
+        kb_id=KnowledgeBaseId(str(getattr(doc, "kb_id", "") or "")),
+        document_id=DocumentId(str(getattr(doc, "id", "") or "")),
+        file_id=KnowledgeFileId(file_id),
+        page=int(page),
+        pages_total=pages_total,
+        content=str(content),
+        content_len=int(len(content)),
+        meta=meta,
+    )
 
 
 def _coerce_hit_source(value: Any) -> HitSource:
@@ -531,55 +591,53 @@ async def get_page_record(
     [边界] 只读；不重算 parse；要求 ingest 已持久化 parsed markdown path。
     """
     try:
-        repo = DocumentRepo(session)
-
-        doc = await repo.get_document(str(document_id))
-        if doc is None:
-            raise NotFoundError(message="document not found")
-
-        # docstring: optional kb scope
-        if kb_id is not None and str(getattr(doc, "kb_id", "") or "").strip() != str(kb_id).strip():
-            raise NotFoundError(message="document not found in kb scope")
-
-        file_id = str(getattr(doc, "file_id", "") or "").strip()
-        if not file_id:
-            raise InternalError("document missing file_id")
-
-        file_row = await repo.get_file(file_id)
-        pages_total = int(getattr(file_row, "pages", 0) or 0) or None
-
-        meta_doc = dict(getattr(doc, "meta_data", {}) or {})
-        md_path_raw = str(meta_doc.get("parsed_markdown_path") or "").strip()
-        if not md_path_raw:
-            raise NotFoundError(message="parsed markdown not available (re-ingest required)")
-
-        md_path = Path(md_path_raw).expanduser().resolve()
-        if not md_path.exists() or not md_path.is_file():
-            raise NotFoundError(message="parsed markdown file not found on disk")
-
-        md_text = read_text(md_path)
-        pages_map = _split_markdown_by_page(md_text)
-        if int(page) not in pages_map:
-            raise NotFoundError(message=f"page not found: {int(page)}")
-
-        content = pages_map[int(page)]
-        if max_chars > 0 and len(content) > int(max_chars):
-            content = content[: int(max_chars)]
-
-        meta: dict[str, Any] = {
-            "parsed_markdown_path": str(md_path),
-            "has_page_marks": bool(_PAGE_MARK_RE.search(md_text)),
-        }
-
-        return PageRecordView(
-            kb_id=KnowledgeBaseId(str(getattr(doc, "kb_id", "") or "")),
-            document_id=DocumentId(str(getattr(doc, "id", "") or "")),
-            file_id=KnowledgeFileId(file_id),
+        return await _read_page_record(
+            session=session,
+            document_id=str(document_id),
             page=int(page),
-            pages_total=pages_total,
-            content=str(content),
-            content_len=int(len(content)),
-            meta=meta,
+            kb_id=kb_id,
+            max_chars=int(max_chars),
+        )
+    except Exception as exc:
+        return to_json_response(  # type: ignore[return-value]
+            exc,
+            trace_id=str(trace_context.trace_id),
+            request_id=str(trace_context.request_id),
+        )
+
+
+@router.get("/page/by_node/{node_id}", response_model=PageRecordView)
+async def get_page_record_by_node(
+    node_id: str,
+    kb_id: Optional[str] = Query(default=None, description="Optional KB scope validation"),
+    max_chars: int = Query(default=8000, ge=0, le=200000, description="Max characters to return (0=full)"),
+    session: AsyncSession = Depends(get_session),
+    trace_context: TraceContext = Depends(get_trace_context),
+) -> PageRecordView:
+    """
+    [职责] 通过 node_id 强对齐回放其所在页（node -> document_id + page -> page replay）。
+    [边界] 只读；不重算 parse；要求 ingest 已持久化 parsed markdown path。
+    """
+    try:
+        stmt = select(NodeModel).where(NodeModel.id == str(node_id))
+        res = await session.execute(stmt)
+        node = res.scalars().first()
+        if node is None:
+            raise NotFoundError(message="node not found")
+
+        doc_id = str(getattr(node, "document_id", "") or "").strip()
+        page = getattr(node, "page", None)
+        if not doc_id:
+            raise InternalError(message="node missing document_id")
+        if page is None or int(page) <= 0:
+            raise InternalError(message="node missing page")
+
+        return await _read_page_record(
+            session=session,
+            document_id=doc_id,
+            page=int(page),
+            kb_id=kb_id,
+            max_chars=int(max_chars),
         )
     except Exception as exc:
         return to_json_response(  # type: ignore[return-value]

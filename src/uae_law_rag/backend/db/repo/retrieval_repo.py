@@ -33,6 +33,25 @@ class RetrievalRepo:
         stmt = select(RetrievalRecordModel).where(RetrievalRecordModel.message_id == message_id)
         return await self._session.scalar(stmt)
 
+    async def resolve_document_id_for_node_ids(self, node_ids: Sequence[str]) -> Optional[str]:
+        """
+        Resolve document_id by node_ids (first match in input order).
+        [边界] 只查 NodeModel.id/document_id，不触发 relationship。
+        """
+        ids = [str(x).strip() for x in (node_ids or []) if str(x).strip()]
+        if not ids:
+            return None
+
+        stmt = select(NodeModel.id, NodeModel.document_id).where(NodeModel.id.in_(list(dict.fromkeys(ids))))
+        res = await self._session.execute(stmt)
+        rows = list(res.all())
+        m = {str(r[0]): str(r[1]) for r in rows if r and r[0] and r[1]}
+        for nid in ids:
+            doc_id = str(m.get(nid) or "").strip()
+            if doc_id:
+                return doc_id
+        return None
+
     async def create_record(
         self,
         *,
