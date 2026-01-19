@@ -12,7 +12,6 @@ from __future__ import annotations
 from typing import List, Optional, Sequence, Dict
 
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.retrieval import RetrievalHitModel, RetrievalRecordModel
@@ -123,9 +122,19 @@ class RetrievalRepo:
             if start_offset is None and n is not None:
                 start_offset = getattr(n, "start_offset", None)
 
+            try:
+                start_offset = int(start_offset) if start_offset is not None else None
+            except Exception:
+                start_offset = None
+
             end_offset = h.get("end_offset")
             if end_offset is None and n is not None:
                 end_offset = getattr(n, "end_offset", None)
+
+            try:
+                end_offset = int(end_offset) if end_offset is not None else None
+            except Exception:
+                end_offset = None
 
             article_id = h.get("article_id")
             if article_id is None and n is not None:
@@ -155,13 +164,12 @@ class RetrievalRepo:
         await self._session.flush()
         return objs
 
-    async def list_hits(self, retrieval_record_id: str) -> List[RetrievalHitModel]:
+    async def list_hits(self, *, retrieval_record_id: str) -> List[RetrievalHitModel]:
         """List hits for a retrieval record ordered by rank."""  # docstring: 生成与评估读取证据列表
         stmt = (
             select(RetrievalHitModel)
             .where(RetrievalHitModel.retrieval_record_id == retrieval_record_id)
             .order_by(RetrievalHitModel.rank.asc())
-            .options(selectinload(RetrievalHitModel.node))
         )
         res = await self._session.scalars(stmt)
         return list(res.all())

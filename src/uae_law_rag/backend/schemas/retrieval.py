@@ -95,6 +95,8 @@ class RetrievalHit(BaseModel):
     page: Optional[int] = Field(default=None)  # docstring: 证据定位快照
     start_offset: Optional[int] = Field(default=None)  # docstring: 证据定位快照
     end_offset: Optional[int] = Field(default=None)  # docstring: 证据定位快照
+    artical_id: Optional[str] = Field(default=None)  # docstring: 证据定位快照
+    section_path: Optional[str] = Field(default=None)  # docstring: 证据定位快照
 
 
 class RetrievalBundle(BaseModel):

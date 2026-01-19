@@ -34,6 +34,10 @@ class Citation(BaseModel):
     quote: str = Field(default="")  # docstring: 可选引用片段（短文本，用于 UI；不应超过少量字符）
     locator: Dict[str, Any] = Field(default_factory=dict)  # docstring: 定位信息（page/article_id/section_path 等）
 
+    page: Optional[int] = Field(...)
+    article_id: Optional[str] = Field(...)
+    section_path: Optional[str] = Field(...)
+
 
 class CitationsPayload(BaseModel):
     """

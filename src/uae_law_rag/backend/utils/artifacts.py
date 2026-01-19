@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
+
+from typing import Dict, List
+
+_PAGE_MARK_RE = re.compile(r"<!--\s*page:\s*(\d+)\s*-->", re.IGNORECASE)
 
 # docstring: repo relative default data root
 DEFAULT_DATA_ROOT = ".data"
@@ -86,3 +91,78 @@ def read_text(path: Path, encoding: str = "utf-8") -> str:
     [职责] 读取文本文件。
     """
     return path.read_text(encoding=encoding)
+
+
+def build_page_start_index(md: str) -> Dict[int, int]:
+    """
+    [职责] 在“全量 markdown 字符串”中，计算每个 page chunk 的起始 index（用于全量 offset -> 页内 offset 转换）。
+    [边界] 依赖 <!-- page: N --> 标记；若缺失标记，返回 {1: 0}。
+    """
+    text = str(md or "")
+    matches = list(_PAGE_MARK_RE.finditer(text))
+    if not matches:
+        return {1: 0}
+    out: Dict[int, int] = {}
+    for m in matches:
+        try:
+            page_no = int(m.group(1))
+        except Exception:
+            continue
+        # 约定：page chunk 从 marker 开始（与 /records/page 的 split 逻辑对齐）
+        out[page_no] = int(m.start())
+    return out
+
+
+def normalize_offsets_to_page_local(
+    *,
+    node_dicts: List[dict],
+    markdown: str,
+) -> List[dict]:
+    """
+    [职责] 将 node_dicts 中的 start_offset/end_offset（全量绝对 offset）转换为页内 offset。
+    [边界] 若 node 未提供 page 或 offset，则保持原值；若 page mark 缺失，则按单页处理。
+    """
+    page_start = build_page_start_index(markdown)
+    if not page_start:
+        page_start = {1: 0}
+
+    out: List[dict] = []
+    for n in node_dicts or []:
+        d = dict(n or {})
+        page = d.get("page")
+        try:
+            page_i = int(page) if page is not None else None
+        except Exception:
+            page_i = None
+
+        if page_i is None:
+            out.append(d)
+            continue
+
+        base = page_start.get(page_i)
+        if base is None:
+            # page 不在 index 中：按单页/或异常数据回退为不转换
+            out.append(d)
+            continue
+
+        def _coerce_int(v):
+            if v is None:
+                return None
+            try:
+                return int(v)
+            except Exception:
+                return None
+
+        s = _coerce_int(d.get("start_offset"))
+        e = _coerce_int(d.get("end_offset"))
+        if s is not None:
+            d["start_offset"] = max(0, s - int(base))
+        if e is not None:
+            d["end_offset"] = max(0, e - int(base))
+        # 可选：记录转换信息，便于审计/回滚
+        meta = dict(d.get("meta_data") or d.get("meta") or {})
+        meta.setdefault("offset_mode", "page_local")
+        d["meta_data"] = meta
+        out.append(d)
+
+    return out

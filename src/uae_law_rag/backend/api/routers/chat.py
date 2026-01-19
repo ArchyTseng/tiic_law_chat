@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -104,7 +104,19 @@ def _build_citations(raw: Any) -> List[CitationView]:
             items.append(item)  # docstring: 兼容已是 CitationView 的输入
             continue
         if isinstance(item, dict):
-            items.append(CitationView.model_validate(item))  # docstring: dict 走模型校验
+            v = CitationView.model_validate(item)  # docstring: dict 走模型校验
+            loc = v.locator if isinstance(v.locator, dict) else {}
+            # docstring: flatten locator -> top-level fields for frontend grouping
+            if v.page is None and loc.get("page") is not None:
+                try:
+                    v.page = int(cast(int, loc.get("page")))
+                except Exception:
+                    pass
+            if v.article_id is None and loc.get("article_id"):
+                v.article_id = str(loc.get("article_id"))
+            if v.section_path is None and loc.get("section_path"):
+                v.section_path = str(loc.get("section_path"))
+            items.append(v)
     return items  # docstring: 返回 citations 列表
 
 

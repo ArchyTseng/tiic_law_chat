@@ -57,7 +57,11 @@ from uae_law_rag.backend.utils.errors import (
     PipelineError,
 )
 from uae_law_rag.backend.utils.logging_ import get_logger, log_event, truncate_text
-from uae_law_rag.backend.utils.artifacts import get_parsed_markdown_path, write_text_atomic
+from uae_law_rag.backend.utils.artifacts import (
+    get_parsed_markdown_path,
+    write_text_atomic,
+    normalize_offsets_to_page_local,
+)
 
 INGEST_STATUS_PENDING = "pending"
 INGEST_STATUS_SUCCESS = "success"
@@ -453,6 +457,14 @@ async def ingest_file(
                 )  # docstring: Markdown -> Node payloads（dry_run）
             if not node_dicts:
                 raise ValueError("segment produced no nodes")  # docstring: 禁止空节点集合
+
+            # docstring: normalize offsets to page-local (P2-0g)
+            try:
+                md_text = str((parsed or {}).get("markdown") or "")
+            except Exception:
+                md_text = ""
+            if md_text.strip():
+                node_dicts = normalize_offsets_to_page_local(node_dicts=node_dicts, markdown=md_text)
 
             state = _advance_state(state, STATE_EMBEDDING)  # docstring: dry_run 进入 embedding
             current_stage = "embed"

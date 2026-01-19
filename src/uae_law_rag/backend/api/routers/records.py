@@ -291,7 +291,7 @@ async def get_retrieval_record(
         record = await repo.get_record(str(retrieval_record_id))  # docstring: 获取 record
         if record is None:
             raise NotFoundError(message="retrieval record not found")  # docstring: 记录不存在
-        hits = await repo.list_hits(str(retrieval_record_id))  # docstring: 获取 hits
+        hits = await repo.list_hits(retrieval_record_id=str(retrieval_record_id))  # docstring: 获取 hits
 
         def _opt_int(v: Any) -> Optional[int]:
             if v is None:
@@ -333,7 +333,7 @@ async def get_retrieval_record(
 
         hit_views: List[HitSummary] = []
         hits_by_source: Dict[str, List[HitSummary]] = {}
-        hit_counts: Dict[str, int] = {}
+        hit_counts: Dict[str, int] = {}  # docstring: ALWAYS computed for auditability
 
         for hit in hits:
             src = _coerce_hit_source(getattr(hit, "source", None))
@@ -352,10 +352,12 @@ async def get_retrieval_record(
                 )
             )  # docstring: 映射 HitSummary
 
+            # docstring: ALWAYS update hit_counts (even if group=false)
+            k = str(src or "unknown")
+            hit_counts[k] = int(hit_counts.get(k, 0)) + 1
+
             if group:
-                k = str(src or "unknown")
                 hits_by_source.setdefault(k, []).append(hit_views[-1])
-                hit_counts[k] = int(hit_counts.get(k, 0)) + 1
 
         return RetrievalRecordView(
             retrieval_record_id=RetrievalRecordId(str(record.id)),
@@ -366,7 +368,7 @@ async def get_retrieval_record(
             timing_ms=timing_ms,
             hits=hit_views,
             hits_by_source=hits_by_source if group else {},
-            hit_counts=hit_counts if group else {},
+            hit_counts=hit_counts,
         )  # docstring: 返回检索记录视图
 
     except Exception as exc:

@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from uae_law_rag.backend.db.repo.retrieval_repo import RetrievalRepo
 from uae_law_rag.backend.db.repo.generation_repo import GenerationRepo
 from uae_law_rag.backend.pipelines.base.context import PipelineContext
 from uae_law_rag.backend.schemas.generation import (
@@ -449,9 +450,12 @@ async def run_generation_pipeline(
         raw_text = _build_error_raw("empty_output", "raw_text is empty")  # docstring: 空输出兜底
 
     with ctx.timing.stage("postprocess"):
+        # docstring: IMPORTANT: hydrate hits from DB to ensure locator fields (page/offset/article/section) are present
+        retrieval_repo = RetrievalRepo(session)
+        hits_db = await retrieval_repo.list_hits(retrieval_record_id=str(retrieval_record_id))
         post_result = postprocess_mod.postprocess_generation(
             raw_text=raw_text,
-            hits=hits,
+            hits=hits_db,
             config=cfg.postprocess_config,
         )  # docstring: 解析输出与 citations 对齐
 
@@ -490,7 +494,7 @@ async def run_generation_pipeline(
             retry_usage = retry_result["usage"]
 
             retry_post_result = postprocess_mod.postprocess_generation(
-                raw_text=retry_raw_text, hits=hits, config=cfg.postprocess_config
+                raw_text=retry_raw_text, hits=hits_db, config=cfg.postprocess_config
             )
             retry_err = str(retry_post_result.get("error_message") or "")
 

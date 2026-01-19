@@ -13,17 +13,37 @@ import re
 import json
 from dataclasses import dataclass
 from uuid import UUID
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, cast
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, cast, Protocol
 
 from uae_law_rag.backend.schemas.generation import Citation
 from uae_law_rag.backend.schemas.ids import NodeId, UUIDStr
-from uae_law_rag.backend.schemas.retrieval import RetrievalHit
 
 
 __all__ = ["postprocess_generation"]
 
 _STATUS_ORDER = {"success": 0, "partial": 1, "blocked": 2, "failed": 3}  # docstring: status 严重程度顺序
 _DEFAULT_MAX_QUOTE_CHARS = 240  # docstring: citation.quote 最大长度
+
+
+# ----------------------------
+# Typing: RetrievalHitLike
+# ----------------------------
+class RetrievalHitLike(Protocol):
+    """
+    [职责] RetrievalHitLike：postprocess 所需的最小 hit 结构合同（结构化子类型）。
+    [边界] 不要求 ORM/schema 具体类型；只要能 getattr/读到这些字段即可。
+    """
+
+    node_id: Any
+    rank: Any
+    excerpt: Any
+    page: Any
+    start_offset: Any
+    end_offset: Any
+    article_id: Any
+    section_path: Any
+    source: Any
+    score_details: Any
 
 
 @dataclass(frozen=True)
@@ -171,14 +191,14 @@ def _read_hit_field(hit: Any, key: str, default: Any = None) -> Any:
     return default  # docstring: 无字段时返回默认值
 
 
-def _build_hit_index(hits: Sequence[RetrievalHit]) -> Dict[str, RetrievalHit]:
+def _build_hit_index(hits: Sequence[RetrievalHitLike]) -> Dict[str, RetrievalHitLike]:
     """
     [职责] 构建 node_id -> RetrievalHit 映射。
     [边界] 重复 node_id 取 rank 更小者。
     [上游关系] postprocess_generation 调用。
     [下游关系] citation 对齐使用。
     """
-    hit_map: Dict[str, RetrievalHit] = {}  # docstring: 命中映射容器
+    hit_map: Dict[str, RetrievalHitLike] = {}  # docstring: 命中映射容器
     for hit in hits or []:
         node_id = _coerce_str(_read_hit_field(hit, "node_id"))  # docstring: 读取 node_id
         if not node_id:
@@ -307,7 +327,7 @@ def _parse_citation_item(item: Any) -> Tuple[Optional[Dict[str, Any]], Optional[
     return {"node_id": node_id, "rank": rank, "quote": quote, "locator": dict(locator)}, None
 
 
-def _build_locator_from_hit(hit: RetrievalHit) -> Dict[str, Any]:
+def _build_locator_from_hit(hit: RetrievalHitLike) -> Dict[str, Any]:
     """
     [职责] 从 hit 构建 locator 快照。
     [边界] 仅使用 hit 的可用字段；缺失字段返回 None。
@@ -357,7 +377,7 @@ def _is_uuid(value: str) -> bool:
 def _build_citation(
     *,
     parsed: Mapping[str, Any],
-    hit: RetrievalHit,
+    hit: RetrievalHitLike,
     rank_fallback: int,
     max_quote_chars: int,
 ) -> Citation:
@@ -388,18 +408,25 @@ def _build_citation(
     parsed_locator = parsed_locator_raw if isinstance(parsed_locator_raw, Mapping) else {}  # docstring: locator 解析
     locator = _merge_locator(parsed_locator, _build_locator_from_hit(hit))  # docstring: locator 合并
 
+    # docstring: flatten common locator fields for HTTP CitationView convenience
+    page = _coerce_int(locator.get("page"))
+    article_id = _coerce_str(locator.get("article_id"))
+    section_path = _coerce_str(locator.get("section_path"))
     return Citation(
         node_id=node_id,
         rank=rank,
         quote=quote or "",
         locator=locator,
-    )  # docstring: 构造 Citation
+        page=page,
+        article_id=article_id,
+        section_path=section_path,
+    )
 
 
 def postprocess_generation(
     *,
     raw_text: str,
-    hits: Sequence[RetrievalHit],
+    hits: Sequence[RetrievalHitLike],
     config: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
