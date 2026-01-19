@@ -506,6 +506,10 @@ async def get_node_record(
         eo_raw = getattr(node, "end_offset", None)
         start_offset = int(so_raw) if so_raw is not None else None
         end_offset = int(eo_raw) if eo_raw is not None else None
+        pso_raw = getattr(node, "page_start_offset", None)
+        peo_raw = getattr(node, "page_end_offset", None)
+        page_start_offset = int(pso_raw) if pso_raw is not None else None
+        page_end_offset = int(peo_raw) if peo_raw is not None else None
 
         return NodeRecordView(
             node_id=NodeId(str(node.id)),
@@ -515,6 +519,8 @@ async def get_node_record(
             page=int(getattr(node, "page", 0) or 0) or None,
             start_offset=start_offset,
             end_offset=end_offset,
+            page_start_offset=page_start_offset,
+            page_end_offset=page_end_offset,
             article_id=(str(node.article_id).strip() or None) if getattr(node, "article_id", None) else None,
             section_path=(str(node.section_path).strip() or None) if getattr(node, "section_path", None) else None,
             text_excerpt=excerpt,

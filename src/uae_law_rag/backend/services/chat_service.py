@@ -725,6 +725,7 @@ def _build_debug_payload(
     hits_count: Optional[int],
     document_id: Optional[str],
     evidence: Optional[Dict[str, Any]],
+    prompt_debug: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """
     [职责] 组装 debug 输出（record_id/gate/provider_snapshot/timing_ms）。
@@ -761,6 +762,8 @@ def _build_debug_payload(
         payload["document_id"] = str(document_id)  # docstring: debug.records.document_id
     if evidence is not None:
         payload["evidence"] = evidence  # docstring: debug.evidence
+    if prompt_debug is not None:
+        payload["prompt_debug"] = prompt_debug  # docstring: debug.prompt_debug
     return payload
 
 
@@ -804,6 +807,23 @@ def _merge_provider_snapshot(*snapshots: Optional[Mapping[str, Any]]) -> Dict[st
         if isinstance(snapshot, Mapping):
             merged.update(snapshot)  # docstring: 覆盖更新
     return merged
+
+
+def _extract_prompt_debug(generation_bundle: Optional[Any]) -> Optional[Dict[str, Any]]:
+    """
+    [职责] 从 generation_bundle 中提取 prompt_debug（若存在）。
+    [边界] 仅返回 Mapping；无则返回 None。
+    [上游关系] chat(...) debug 构造调用。
+    [下游关系] debug.prompt_debug 输出。
+    """
+    if generation_bundle is None:
+        return None  # docstring: 无 generation_bundle
+    record = getattr(generation_bundle, "record", None)
+    snapshot = getattr(record, "messages_snapshot", None)
+    if not isinstance(snapshot, Mapping):
+        return None  # docstring: 无 messages_snapshot
+    prompt_debug = snapshot.get("prompt_debug")
+    return dict(prompt_debug) if isinstance(prompt_debug, Mapping) else None  # docstring: 兜底返回
 
 
 def _classify_error(exc: Exception, *, stage: Optional[str]) -> DomainError:
@@ -1150,6 +1170,7 @@ async def chat(
                         hits_count=hits_count,
                         document_id=document_id,
                         evidence=evidence,
+                        prompt_debug=None,
                     )  # docstring: debug 模式返回完整 payload
                 else:
                     debug_payload = _build_records_payload(
@@ -1288,6 +1309,7 @@ async def chat(
                     retrieval_repo=retrieval_repo,
                     retrieval_record_id=retrieval_record_id,
                 )
+                prompt_debug = _extract_prompt_debug(generation_bundle)
                 debug_payload = _build_debug_payload(
                     retrieval_record_id=retrieval_record_id,
                     generation_record_id=generation_record_id,
@@ -1306,6 +1328,7 @@ async def chat(
                     hits_count=hits_count,
                     document_id=document_id,
                     evidence=evidence,
+                    prompt_debug=prompt_debug,
                 )  # docstring: debug 模式返回完整 payload
             else:
                 debug_payload = _build_records_payload(

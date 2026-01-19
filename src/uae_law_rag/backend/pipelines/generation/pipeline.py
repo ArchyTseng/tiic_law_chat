@@ -14,8 +14,10 @@ import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence, cast
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from uae_law_rag.backend.db.models.doc import NodeModel
 from uae_law_rag.backend.db.repo.retrieval_repo import RetrievalRepo
 from uae_law_rag.backend.db.repo.generation_repo import GenerationRepo
 from uae_law_rag.backend.pipelines.base.context import PipelineContext
@@ -193,6 +195,80 @@ def _timing_snapshot(ctx: PipelineContext) -> Dict[str, float]:
     return ctx.timing.to_dict(include_total=True, total_key=TIMING_TOTAL_KEY)  # docstring: total 使用一致 key
 
 
+def _collect_node_ids(hits: Sequence[RetrievalHit], *, max_nodes: int = 200) -> List[str]:
+    """
+    [职责] 从 hits 中收集去重 node_id（保持首次出现顺序）。
+    [边界] 仅提取 node_id 字符串；超出 max_nodes 即截断。
+    [上游关系] _build_node_snapshots 调用。
+    [下游关系] Node 查询入参。
+    """
+    out: List[str] = []  # docstring: node_id 列表
+    seen: set[str] = set()  # docstring: 去重缓存
+    limit = int(max_nodes) if max_nodes is not None else 0  # docstring: 最大数量
+    for hit in hits or []:
+        node_id = str(getattr(hit, "node_id", "") or "").strip()
+        if not node_id or node_id in seen:
+            continue
+        seen.add(node_id)  # docstring: 记录已见 node_id
+        out.append(node_id)  # docstring: 收集 node_id
+        if limit > 0 and len(out) >= limit:
+            break  # docstring: 达到上限即停止
+    return out
+
+
+async def _build_node_snapshots(
+    *,
+    session: AsyncSession,
+    hits: Sequence[RetrievalHit],
+    max_nodes: int,
+    max_excerpt_chars: int,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    [职责] 从 DB 读取 node 快照，补齐 window/original_text 等 meta 字段。
+    [边界] 仅返回必要字段；不引入全文泄露到 debug。
+    [上游关系] run_generation_pipeline(prompt 构建) 调用。
+    [下游关系] prompt.build_messages 读取 node_snapshots。
+    """
+    node_ids = _collect_node_ids(hits, max_nodes=max_nodes)  # docstring: node_id 去重
+    if not node_ids:
+        return {}  # docstring: 无 node_id 直接返回空
+
+    stmt = select(NodeModel).where(NodeModel.id.in_(node_ids))
+    res = await session.execute(stmt)
+    nodes = list(res.scalars().all())
+
+    snapshots: Dict[str, Dict[str, Any]] = {}  # docstring: node_id -> snapshot
+    for node in nodes:
+        meta = dict(getattr(node, "meta_data", None) or {})  # docstring: meta_data 兜底
+        snapshot: Dict[str, Any] = {"meta": meta}  # docstring: 保留 meta window/original_text
+
+        text_raw = getattr(node, "text", None)
+        if isinstance(text_raw, str) and text_raw.strip() and max_excerpt_chars > 0:
+            excerpt = text_raw.strip()
+            if len(excerpt) > int(max_excerpt_chars):
+                excerpt = excerpt[: int(max_excerpt_chars)]  # docstring: 限制 snapshot 体积
+            snapshot["text_excerpt"] = excerpt  # docstring: 作为最弱兜底
+
+        page = getattr(node, "page", None)
+        if page is not None:
+            snapshot["page"] = page
+        start_offset = getattr(node, "start_offset", None)
+        if start_offset is not None:
+            snapshot["start_offset"] = start_offset
+        end_offset = getattr(node, "end_offset", None)
+        if end_offset is not None:
+            snapshot["end_offset"] = end_offset
+        article_id = getattr(node, "article_id", None)
+        if article_id:
+            snapshot["article_id"] = article_id
+        section_path = getattr(node, "section_path", None)
+        if section_path:
+            snapshot["section_path"] = section_path
+
+        snapshots[str(node.id)] = snapshot  # docstring: 收集 snapshot
+    return snapshots
+
+
 def _build_provider_snapshot(
     *,
     base_snapshot: Dict[str, Any],
@@ -360,12 +436,20 @@ async def run_generation_pipeline(
 
     with ctx.timing.stage("prompt"):
         try:
+            node_snapshots = cfg.node_snapshots
+            if node_snapshots is None and hits:
+                node_snapshots = await _build_node_snapshots(
+                    session=session,
+                    hits=hits,
+                    max_nodes=len(hits),
+                    max_excerpt_chars=cfg.max_excerpt_chars,
+                )  # docstring: 补齐 window/original_text 快照
             messages_snapshot = prompt_mod.build_messages(
                 query=query_text,
                 hits=hits,
                 prompt_name=cfg.prompt_name,
                 prompt_version=cfg.prompt_version,
-                node_snapshots=cfg.node_snapshots,
+                node_snapshots=node_snapshots,
                 max_excerpt_chars=cfg.max_excerpt_chars,
             )  # docstring: 构建 prompt/messages_snapshot
         except Exception as exc:

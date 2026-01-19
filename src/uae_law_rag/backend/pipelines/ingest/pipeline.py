@@ -23,6 +23,7 @@ from uae_law_rag.backend.db.models.doc import DocumentModel, KnowledgeFileModel,
 from uae_law_rag.backend.pipelines.base.context import PipelineContext
 from uae_law_rag.backend.utils.artifacts import (
     get_parsed_markdown_path,
+    normalize_offsets_to_page_local,
     write_text_atomic,
 )
 
@@ -249,6 +250,14 @@ async def run_ingest_pdf(
             )  # docstring: Markdown → Node payloads
         if not node_dicts:
             raise ValueError("segment produced no nodes")  # docstring: 禁止空节点集合
+
+        # docstring: attach page-local offsets for replay/highlight (P0-2d)
+        try:
+            md_text = str((parsed or {}).get("markdown") or "")
+        except Exception:
+            md_text = ""
+        if md_text.strip():
+            node_dicts = normalize_offsets_to_page_local(node_dicts=node_dicts, markdown=md_text)
 
         ctx.with_provider(
             "embed",

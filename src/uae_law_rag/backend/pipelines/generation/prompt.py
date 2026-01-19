@@ -15,7 +15,7 @@ from uae_law_rag.backend.schemas.retrieval import RetrievalHit
 from uae_law_rag.backend.utils.constants import PROMPT_NAME_KEY, PROMPT_VERSION_KEY
 
 
-__all__ = ["build_messages"]
+__all__ = ["build_messages", "select_generation_context_text", "select_quote_anchor_text"]
 
 DEFAULT_PROMPT_NAME = "uae_law_grounded"  # docstring: 默认 prompt 名称
 DEFAULT_PROMPT_VERSION = "v1"  # docstring: 默认 prompt 版本
@@ -30,6 +30,8 @@ _TEXT_KEYS = (
     "raw_text",
     "page_text",
 )  # docstring: 证据文本候选字段
+
+_TEXT_EXCERPT_KEYS = ("text_excerpt",) + _TEXT_KEYS  # docstring: evidence excerpt候选字段
 
 SYSTEM_PROMPT = """You are UAE Law Assistant.
 
@@ -177,21 +179,109 @@ def _extract_snapshot(
     return dict(snapshot)  # docstring: 复制快照避免外部修改
 
 
-def _pick_excerpt(hit: Any, snapshot: Mapping[str, Any], *, max_chars: int) -> str:
+def _read_meta(snapshot: Mapping[str, Any]) -> Mapping[str, Any]:
     """
-    [职责] 从 hit/snapshot 中选取可用证据文本。
+    [职责] 读取 snapshot.meta 或 snapshot.meta_data。
+    [边界] 非 dict 直接回退空 dict。
+    [上游关系] select_generation_context_text/select_quote_anchor_text 调用。
+    [下游关系] window/original_text 选择。
+    """
+    meta = snapshot.get("meta") or snapshot.get("meta_data") or {}
+    return meta if isinstance(meta, Mapping) else {}  # docstring: meta 兜底
+
+
+def _pick_first_text(candidates: Sequence[Any], *, max_chars: int) -> str:
+    """
+    [职责] 选取首个可用文本并做压缩截断。
+    [边界] 仅处理字符串；无可用文本返回空字符串。
+    [上游关系] select_generation_context_text/select_quote_anchor_text 调用。
+    [下游关系] 证据文本选择结果。
+    """
+    for value in candidates:
+        if isinstance(value, str) and value.strip():
+            return _normalize_excerpt(value, max_chars=max_chars)  # docstring: 使用首个可用文本
+    return ""  # docstring: 无可用文本
+
+
+def _select_generation_context_choice(
+    node_like: Mapping[str, Any],
+    *,
+    max_chars: int,
+) -> Tuple[str, str]:
+    """
+    [职责] 选择 generator 的证据文本并返回使用来源。
+    [边界] 仅使用 node/hit snapshot 字段；不访问 DB。
+    [上游关系] select_generation_context_text / _pick_excerpt。
+    [下游关系] prompt_debug 统计 used 来源。
+    """
+    snapshot = dict(node_like or {})  # docstring: 防御性复制
+    meta = _read_meta(snapshot)  # docstring: meta 读取
+    window = meta.get("window")  # docstring: window 候选
+    original = meta.get("original_text") or snapshot.get("original_text")  # docstring: original_text 候选
+    if isinstance(window, str) and window.strip():
+        return _normalize_excerpt(window, max_chars=max_chars), "window"  # docstring: window 优先
+    if isinstance(original, str) and original.strip():
+        return _normalize_excerpt(original, max_chars=max_chars), "original_text"  # docstring: original_text 兜底
+
+    candidates = []
+    for key in _TEXT_EXCERPT_KEYS:
+        candidates.append(snapshot.get(key))
+        candidates.append(meta.get(key))
+    text = _pick_first_text(candidates, max_chars=max_chars)  # docstring: excerpt/text 兜底
+    return text, "excerpt"  # docstring: excerpt 兜底
+
+
+def select_generation_context_text(
+    node_like: Mapping[str, Any],
+    *,
+    max_chars: int = DEFAULT_MAX_EXCERPT_CHARS,
+) -> str:
+    """
+    [职责] 选择 generator 的证据文本（window 优先）。
+    [边界] 仅使用 node/hit snapshot 字段；不访问 DB。
+    [上游关系] prompt render 选择器。
+    [下游关系] generator_evidence_text。
+    """
+    text, _ = _select_generation_context_choice(node_like, max_chars=max_chars)
+    return text  # docstring: 仅返回文本内容
+
+
+def select_quote_anchor_text(
+    node_like: Mapping[str, Any],
+    *,
+    max_chars: int = DEFAULT_MAX_EXCERPT_CHARS,
+) -> str:
+    """
+    [职责] 选择 citations 对齐锚点文本（original_text 优先）。
+    [边界] 不使用 window；仅使用短文本字段。
+    [上游关系] citation 对齐锚点选择器。
+    [下游关系] quote_anchor_text。
+    """
+    snapshot = dict(node_like or {})  # docstring: 防御性复制
+    meta = _read_meta(snapshot)  # docstring: meta 读取
+    original = meta.get("original_text") or snapshot.get("original_text")  # docstring: original_text 候选
+    if isinstance(original, str) and original.strip():
+        return _normalize_excerpt(original, max_chars=max_chars)  # docstring: original_text 优先
+
+    candidates = []
+    for key in _TEXT_EXCERPT_KEYS:
+        candidates.append(snapshot.get(key))
+        candidates.append(meta.get(key))
+    return _pick_first_text(candidates, max_chars=max_chars)  # docstring: excerpt/text 兜底
+
+
+def _pick_excerpt(hit: Any, snapshot: Mapping[str, Any], *, max_chars: int) -> Tuple[str, str]:
+    """
+    [职责] 从 hit/snapshot 中选取可用证据文本（window 优先）。
     [边界] 不拼接多段文本；仅取首个可用字段。
     [上游关系] _build_evidence_item 调用。
     [下游关系] evidence.excerpt 内容。
     """
-    hit_excerpt = _read_hit_field(hit, "excerpt")  # docstring: 优先使用 hit.excerpt
+    node_like = dict(snapshot)  # docstring: 合并 hit 与 snapshot
+    hit_excerpt = _read_hit_field(hit, "excerpt")
     if isinstance(hit_excerpt, str) and hit_excerpt.strip():
-        return _normalize_excerpt(hit_excerpt, max_chars=max_chars)  # docstring: 使用 hit.excerpt
-    for key in _TEXT_KEYS:
-        val = snapshot.get(key)
-        if isinstance(val, str) and val.strip():
-            return _normalize_excerpt(val, max_chars=max_chars)  # docstring: 使用快照文本字段
-    return ""  # docstring: 无可用文本时返回空
+        node_like.setdefault("excerpt", hit_excerpt)  # docstring: hit.excerpt 兜底
+    return _select_generation_context_choice(node_like, max_chars=max_chars)
 
 
 def _build_evidence_item(
@@ -235,7 +325,7 @@ def _build_evidence_item(
         "source": str(source).strip() if source is not None and str(source).strip() else None,
     }  # docstring: 证据定位快照
 
-    excerpt = _pick_excerpt(hit, snapshot, max_chars=max_excerpt_chars)  # docstring: 提取证据文本
+    excerpt, excerpt_used = _pick_excerpt(hit, snapshot, max_chars=max_excerpt_chars)  # docstring: 提取证据文本
 
     # --- drop empty evidence items (no excerpt) ---
     if not excerpt or not str(excerpt).strip():
@@ -244,8 +334,46 @@ def _build_evidence_item(
         "rank": rank_out,
         "node_id": node_id,
         "excerpt": excerpt,
+        "excerpt_used": excerpt_used,
+        "excerpt_chars": len(excerpt),
         "locator": locator,
     }  # docstring: evidence item
+
+
+def _build_prompt_debug(evidence_items: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    """
+    [职责] 构造 prompt_debug（最小可观测）。
+    [边界] 不输出全文证据；仅输出计数与选择来源。
+    [上游关系] build_messages 调用。
+    [下游关系] messages_snapshot.prompt_debug。
+    """
+    context_items: List[Dict[str, Any]] = []  # docstring: context_items 列表
+    total_chars = 0  # docstring: 累计字符数
+    for item in evidence_items:
+        node_id = str(item.get("node_id") or "").strip()
+        if not node_id:
+            continue  # docstring: 跳过无 node_id
+        used = str(item.get("excerpt_used") or "").strip()
+        if used not in {"window", "original_text", "excerpt"}:
+            continue  # docstring: 跳过未知 used 标记
+        chars_value = item.get("excerpt_chars")
+        try:
+            chars = int(chars_value) if chars_value is not None else 0
+        except Exception:
+            chars = 0  # docstring: chars 兜底为 0
+        locator = item.get("locator") or {}
+        source_value = locator.get("source") if isinstance(locator, Mapping) else None
+        source = str(source_value).strip() if source_value is not None and str(source_value).strip() else None
+        context_items.append(
+            {"node_id": node_id, "source": source, "used": used, "chars": chars}
+        )  # docstring: 收集 context item
+        total_chars += chars
+    return {
+        "version": "v1",
+        "mode": "window_preferred",
+        "context_items": context_items,
+        "totals": {"nodes_used": len(context_items), "total_chars": total_chars},
+    }  # docstring: prompt_debug
 
 
 def _build_evidence_items(
@@ -414,6 +542,7 @@ def build_messages(
         node_snapshots=node_snapshots,
         max_excerpt_chars=max_excerpt_chars,
     )  # docstring: evidence 列表
+    prompt_debug = _build_prompt_debug(evidence_items)  # docstring: prompt_debug 统计
 
     node_ids: List[str] = []  # docstring: node_id 去重列表（用于 VALID NODE IDS）
     seen: set[str] = set()  # docstring: 去重缓存
@@ -447,6 +576,7 @@ def build_messages(
         "query": normalized_query,
         "messages": messages,
         "evidence": evidence_items,
+        "prompt_debug": prompt_debug,
         "valid_node_ids": node_ids,
         "evidence_count": len(evidence_items),
         "output_schema": OUTPUT_SCHEMA_EXAMPLE.strip(),
