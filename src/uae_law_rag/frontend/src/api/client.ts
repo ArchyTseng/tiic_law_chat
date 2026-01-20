@@ -3,10 +3,20 @@
 // 边界: 不处理业务状态，不做 DTO -> Domain 映射。
 // 上游关系: services/*。
 // 下游关系: src/api/endpoints/*。
-import { postChat } from '@/api/endpoints/chat'
-import { postIngest } from '@/api/endpoints/ingest'
+import {
+  getNodeRecord,
+  getPageRecord,
+  getPageRecordByNode,
+  getRetrievalRecord,
+  postChat,
+  postIngest,
+} from '@/api/endpoints'
 
 export const apiClient = {
+  getNode: getNodeRecord,
+  getPageReplay: getPageRecord,
+  getPageReplayByNode: getPageRecordByNode,
+  getRetrievalRecord,
   postChat,
   postIngest,
 }

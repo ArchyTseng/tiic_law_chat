@@ -4,8 +4,8 @@
 // 边界: 不做业务语义转换，不依赖具体 endpoint；仅处理传输层协议与最小可解释错误信息。
 // 上游关系: src/api/endpoints/*。
 // 下游关系: 浏览器 fetch API。
-import { env } from '@/config/env'
-import type { JsonValue } from '@/types/http/json'
+import { env } from '../config/env.ts'
+import type { JsonValue } from '../types/http/json.ts'
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
@@ -21,14 +21,18 @@ export type HttpErrorInfo = {
   url: string
   method: HttpMethod
   message: string
+  traceId?: string
+  requestId?: string
   response_text?: string
   response_json?: JsonValue
 }
 
 export class HttpError extends Error {
   public override readonly name = 'HttpError'
-  constructor(public readonly info: HttpErrorInfo) {
+  public readonly info: HttpErrorInfo
+  constructor(info: HttpErrorInfo) {
     super(info.message)
+    this.info = info
   }
 }
 
@@ -56,6 +60,25 @@ function safeParseJson(text: string): JsonValue | undefined {
     return JSON.parse(text) as JsonValue
   } catch {
     return undefined
+  }
+}
+
+const isJsonRecord = (value: JsonValue | undefined): value is Record<string, JsonValue> => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+const readStringField = (record: Record<string, JsonValue> | undefined, key: string): string | undefined => {
+  const value = record?.[key]
+  return typeof value === 'string' ? value : undefined
+}
+
+const readErrorTrace = (parsed: JsonValue | undefined): { traceId?: string; requestId?: string } => {
+  if (!parsed || !isJsonRecord(parsed)) return {}
+  const error = parsed.error
+  const errorRecord = isJsonRecord(error) ? error : undefined
+  return {
+    traceId: readStringField(errorRecord, 'trace_id') ?? readStringField(parsed, 'trace_id'),
+    requestId: readStringField(errorRecord, 'request_id') ?? readStringField(parsed, 'request_id'),
   }
 }
 
@@ -99,6 +122,11 @@ export const requestJson = async <T>(path: string, options: RequestOptions = {})
   // 先读取文本，保证即使不是 JSON 也能给出可解释错误信息
   const text = await response.text()
   const parsed = safeParseJson(text)
+  const headerTraceId = response.headers.get('x-trace-id') ?? undefined
+  const headerRequestId = response.headers.get('x-request-id') ?? undefined
+  const payloadTrace = readErrorTrace(parsed)
+  const traceId = headerTraceId ?? payloadTrace.traceId
+  const requestId = headerRequestId ?? payloadTrace.requestId
 
   if (!response.ok) {
     throw new HttpError({
@@ -106,6 +134,8 @@ export const requestJson = async <T>(path: string, options: RequestOptions = {})
       url,
       method,
       message: `HTTP ${response.status}`,
+      traceId,
+      requestId,
       response_text: text || undefined,
       response_json: parsed,
     })
@@ -121,6 +151,8 @@ export const requestJson = async <T>(path: string, options: RequestOptions = {})
       url,
       method,
       message: 'Response is not valid JSON',
+      traceId,
+      requestId,
       response_text: text,
     })
   }
