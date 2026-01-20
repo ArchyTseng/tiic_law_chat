@@ -38,15 +38,29 @@ export class HttpError extends Error {
 
 const API_BASE = env.apiBase
 
-const getOrCreateUserId = (): string => {
-  const key = 'uae_law_rag_user_id'
-  const existing = localStorage.getItem(key)
-  if (existing) return existing
+const isBrowserEnv =
+  typeof window !== 'undefined' &&
+  typeof window.localStorage !== 'undefined'
 
-  const created =
-    globalThis.crypto?.randomUUID?.() ?? `anon_${Date.now().toString(36)}`
-  localStorage.setItem(key, created)
-  return created
+let nodeUserId: string | null = null
+
+const getOrCreateUserId = (): string => {
+  // 浏览器环境：保持原行为
+  if (isBrowserEnv) {
+    const key = 'uae_law_rag_user_id'
+    const existing = window.localStorage.getItem(key)
+    if (existing) return existing
+
+    const created =
+      globalThis.crypto?.randomUUID?.() ?? `anon_${Date.now().toString(36)}`
+    window.localStorage.setItem(key, created)
+    return created
+  }
+
+  // Node / Vitest / SSR：进程内兜底，不触发 webstorage
+  if (nodeUserId) return nodeUserId
+  nodeUserId = `anon_${Date.now().toString(36)}`
+  return nodeUserId
 }
 
 const DEFAULT_HEADERS: Record<string, string> = {
