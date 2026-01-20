@@ -4,15 +4,11 @@
 // 边界: 不读写 stores，不直接渲染 UI；仅负责 Domain Input <-> HTTP DTO 映射与传输层调用编排。
 // 上游关系: stores/chat_store.ts（由 store 调用本 service）。
 // 下游关系: api/endpoints/chat.ts。
-import { postChat } from '@/api/endpoints/chat'
-import type { ChatSendInput } from '@/types/domain/chat'
-import type { ChatResult, Citation, EvaluatorSummary } from '@/types/domain/message'
-import type { DebugEnvelope } from '@/types/domain/run'
+import { apiClient } from '@/api/client'
+import { normalizeChatResponse } from '@/services/normalize_chat'
+import type { ChatNormalizedResult, ChatSendInput } from '@/types/domain/chat'
 import type {
   ChatRequestDTO,
-  ChatResponseDTO,
-  CitationViewDTO,
-  EvaluatorSummaryDTO,
 } from '@/types/http/chat_response'
 import { toJsonRecord } from '@/utils/json'
 
@@ -48,63 +44,8 @@ const toChatRequestDTO = (input: ChatSendInput): ChatRequestDTO => {
   } as ChatRequestDTO
 }
 
-const mapEvaluatorSummary = (evaluator: EvaluatorSummaryDTO): EvaluatorSummary => {
-  return {
-    status: evaluator.status,
-    ruleVersion: evaluator.rule_version,
-    warnings: evaluator.warnings,
-  }
-}
-
-const mapCitation = (citation: CitationViewDTO): Citation => {
-  return {
-    nodeId: citation.node_id,
-    rank: citation.rank,
-    quote: citation.quote,
-    page: citation.page,
-    articleId: citation.article_id,
-    sectionPath: citation.section_path,
-    locator: citation.locator,
-  }
-}
-
-const mapDebugEnvelope = (debug: ChatResponseDTO['debug']): DebugEnvelope | undefined => {
-  if (!debug) return undefined
-
-  const records = debug.records
-
-  return {
-    traceId: debug.trace_id,
-    requestId: debug.request_id,
-    records: {
-      retrievalRecordId: records.retrieval_record_id,
-      generationRecordId: records.generation_record_id,
-      evaluationRecordId: records.evaluation_record_id,
-      documentId: records.document_id,
-    },
-    timingMs: debug.timing_ms,
-    gate: debug.gate,
-  }
-}
-
-const mapChatResponse = (response: ChatResponseDTO): ChatResult => {
-  return {
-    conversationId: response.conversation_id,
-    messageId: response.message_id,
-    kbId: response.kb_id,
-    status: response.status,
-    answer: response.answer,
-    citations: response.citations.map(mapCitation),
-    evaluator: mapEvaluatorSummary(response.evaluator),
-    timingMs: response.timing_ms,
-    traceId: response.trace_id,
-    requestId: response.request_id,
-    debug: mapDebugEnvelope(response.debug),
-  }
-}
-
-export const sendChat = async (input: ChatSendInput): Promise<ChatResult> => {
+export const sendChat = async (input: ChatSendInput): Promise<ChatNormalizedResult> => {
   const payload = toChatRequestDTO(input)
-  const response = await postChat(payload)
-  return mapChatResponse(response)
+  const response = await apiClient.postChat(payload)
+  return normalizeChatResponse(response)
 }

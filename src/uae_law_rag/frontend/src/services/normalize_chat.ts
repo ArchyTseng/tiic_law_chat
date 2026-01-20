@@ -6,20 +6,13 @@ import type {
   ChatGateDecisionDTO,
   ChatResponseDTO,
   DebugEvidenceDTO,
+  KeywordStatsDTO,
   PromptDebugDTO,
 } from '@/types/http/chat_response'
 import type { EvidenceIndex, EvidenceLocator, EvidenceTreeNode } from '@/types/domain/evidence'
 import type { RunRecord, RunStatus, RunTiming } from '@/types/domain/run'
 import type { StepName, StepRecord, StepStatus } from '@/types/domain/step'
-
-export type NormalizedChat = {
-  run: RunRecord
-  evidence: EvidenceIndex
-  debug?: {
-    evidence?: DebugEvidenceDTO
-    promptDebug?: PromptDebugDTO
-  }
-}
+import type { ChatDebugState, ChatNormalizedResult, KeywordStats, PromptDebug } from '@/types/domain/chat'
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null
@@ -80,31 +73,106 @@ const buildLocator = (citation: ChatResponseDTO['citations'][number]): EvidenceL
   const page = typeof citation.page === 'number' ? citation.page : readNumber(rawLocator, 'page')
   const start = readNumber(rawLocator, 'start_offset') ?? readNumber(rawLocator, 'start')
   const end = readNumber(rawLocator, 'end_offset') ?? readNumber(rawLocator, 'end')
+  const documentId = readString(rawLocator, 'document_id')
+  const locator: EvidenceLocator = {}
 
-  return {
-    ...rawLocator,
-    page,
-    start,
-    end,
-    source: readString(rawLocator, 'source'),
-    articleId: typeof citation.article_id === 'string'
-      ? citation.article_id
-      : readString(rawLocator, 'article_id'),
-    sectionPath: typeof citation.section_path === 'string'
-      ? citation.section_path
-      : readString(rawLocator, 'section_path'),
-  }
+  if (documentId) locator.documentId = documentId
+  if (page !== undefined) locator.page = page
+  if (start !== undefined) locator.start = start
+  if (end !== undefined) locator.end = end
+
+  const source = readString(rawLocator, 'source')
+  if (source) locator.source = source
+
+  const articleId = typeof citation.article_id === 'string'
+    ? citation.article_id
+    : readString(rawLocator, 'article_id')
+  if (articleId) locator.articleId = articleId
+
+  const sectionPath = typeof citation.section_path === 'string'
+    ? citation.section_path
+    : readString(rawLocator, 'section_path')
+  if (sectionPath) locator.sectionPath = sectionPath
+
+  return locator
 }
 
 const buildEvidenceTree = (evidence?: DebugEvidenceDTO): EvidenceTreeNode[] | undefined => {
   if (!evidence) return undefined
-  return evidence.document_ids.map((docId) => ({
-    id: docId,
-    label: docId,
-  }))
+  const nodes: EvidenceTreeNode[] = []
+
+  for (const [sourceKey, sourceValue] of Object.entries(evidence.by_source ?? {})) {
+    const sourceNode: EvidenceTreeNode = {
+      id: `source:${sourceKey}`,
+      label: sourceKey,
+      children: [],
+    }
+
+    for (const [docId, docValue] of Object.entries(sourceValue.by_document ?? {})) {
+      const docNode: EvidenceTreeNode = {
+        id: `doc:${docId}`,
+        label: docId,
+        children: [],
+      }
+
+      for (const [pageKey, nodeIds] of Object.entries(docValue.pages ?? {})) {
+        const pageNode: EvidenceTreeNode = {
+          id: `page:${docId}:${pageKey}`,
+          label: `page ${pageKey}`,
+          children: (nodeIds ?? []).map((nodeId) => ({
+            id: `node:${nodeId}`,
+            label: nodeId,
+          })),
+        }
+        docNode.children?.push(pageNode)
+      }
+
+      sourceNode.children?.push(docNode)
+    }
+
+    nodes.push(sourceNode)
+  }
+
+  return nodes.length ? nodes : undefined
 }
 
-export const normalizeChatResponse = (response: ChatResponseDTO): NormalizedChat => {
+const buildPromptDebug = (debug?: PromptDebugDTO): PromptDebug | undefined => {
+  if (!debug) return undefined
+
+  return {
+    mode: debug.mode,
+    nodesUsed: debug.totals.nodes_used,
+    totalChars: debug.totals.total_chars,
+    items: debug.context_items.map((item) => ({
+      nodeId: item.node_id,
+      source: item.source ?? undefined,
+      used: item.used,
+      chars: item.chars,
+    })),
+  }
+}
+
+const buildKeywordStats = (stats?: KeywordStatsDTO): KeywordStats | undefined => {
+  if (!stats) return undefined
+
+  return {
+    rawQuery: stats.raw_query,
+    items: stats.items.map((item) => ({
+      keyword: item.keyword ?? '',
+      recall: item.recall ?? undefined,
+      precision: item.precision ?? undefined,
+      overlap: item.overlap ?? undefined,
+      counts: {
+        gtTotal: item.gt_total ?? undefined,
+        kwTotal: item.kw_total ?? undefined,
+      },
+      capped: item.capped ?? undefined,
+    })),
+    meta: stats.meta as Record<string, unknown>,
+  }
+}
+
+export const normalizeChatResponse = (response: ChatResponseDTO): ChatNormalizedResult => {
   const gate = response.debug?.gate
   const steps: StepRecord[] = gate
     ? [
@@ -141,14 +209,21 @@ export const normalizeChatResponse = (response: ChatResponseDTO): NormalizedChat
     debugEvidenceTree: buildEvidenceTree(response.debug?.evidence),
   }
 
+  const debug: ChatDebugState = response.debug
+    ? {
+      available: true,
+      promptDebug: buildPromptDebug(response.debug.prompt_debug),
+      keywordStats: buildKeywordStats(response.debug.keyword_stats),
+    }
+    : {
+      available: false,
+      message: 'Debug disabled or not returned.',
+    }
+
   return {
     run,
     evidence,
-    debug: response.debug
-      ? {
-        evidence: response.debug.evidence,
-        promptDebug: response.debug.prompt_debug,
-      }
-      : undefined,
+    answer: response.answer,
+    debug,
   }
 }

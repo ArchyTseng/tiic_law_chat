@@ -6,10 +6,10 @@
 // 下游关系: pages/chat（读取状态与触发 actions）。
 import { sendChat } from '@/services/chat_service'
 import type { ChatSendInput } from '@/types/domain/chat'
-import type { ChatResult } from '@/types/domain/message'
+import type { ChatNormalizedResult } from '@/types/domain/chat'
 
 type ChatStoreState = {
-  results: ChatResult[]
+  results: ChatNormalizedResult[]
 }
 
 const initialState: ChatStoreState = {
@@ -26,11 +26,11 @@ export const chatStore = {
 
   // --- Actions (M1 minimal) ---
 
-  appendResult: (result: ChatResult) => {
+  appendResult: (result: ChatNormalizedResult) => {
     state = { ...state, results: [...state.results, result] }
   },
 
-  sendChatAndAppend: async (input: ChatSendInput): Promise<ChatResult> => {
+  sendChatAndAppend: async (input: ChatSendInput): Promise<ChatNormalizedResult> => {
     const result = await sendChat(input)
     state = { ...state, results: [...state.results, result] }
     return result
