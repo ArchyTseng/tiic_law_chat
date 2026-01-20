@@ -5,18 +5,77 @@
 // 上游关系: services/chat_service.ts。
 // 下游关系: pages/chat（读取状态与触发 actions）。
 import { sendChat } from '@/services/chat_service'
-import type { ChatSendInput } from '@/types/domain/chat'
-import type { ChatNormalizedResult } from '@/types/domain/chat'
+import {
+  loadNodePreview,
+  loadPageReplay,
+  loadPageReplayByNode,
+  loadRetrievalHits,
+} from '@/services/evidence_service'
+import type { ChatContextInput, ChatNormalizedResult, ChatSendInput } from '@/types/domain/chat'
+import type { NodePreview, PageReplay, RetrievalHitsPaged } from '@/types/domain/evidence'
+import type { RetrievalHitsQuery, NodePreviewQuery, PageReplayQuery, PageReplayByNodeQuery } from '@/services/evidence_service'
 
 type ChatStoreState = {
-  results: ChatNormalizedResult[]
+  messages: Array<{ id: string; role: 'user' | 'assistant'; text: string; runId?: string }>
+  activeRunId?: string
+  runsById: Record<string, ChatNormalizedResult>
+  ui: {
+    debugOpen: boolean
+    evidenceOpen: boolean
+  }
+  evidence: {
+    selectedNodeId?: string
+    sourceFilter: string[]
+    offset: number
+    limit: number
+  }
+  cache: {
+    retrievalHitsByKey: Record<string, RetrievalHitsPaged>
+    nodePreviewById: Record<string, NodePreview>
+    pageReplayByKey: Record<string, PageReplay>
+  }
 }
 
-const initialState: ChatStoreState = {
-  results: [],
+const createInitialState = (): ChatStoreState => ({
+  messages: [],
+  activeRunId: undefined,
+  runsById: {},
+  ui: {
+    debugOpen: false,
+    evidenceOpen: false,
+  },
+  evidence: {
+    selectedNodeId: undefined,
+    sourceFilter: [],
+    offset: 0,
+    limit: 10,
+  },
+  cache: {
+    retrievalHitsByKey: {},
+    nodePreviewById: {},
+    pageReplayByKey: {},
+  },
+})
+
+let state: ChatStoreState = createInitialState()
+
+const buildRetrievalCacheKey = (
+  retrievalRecordId: string,
+  query: { source?: string[]; offset?: number; limit?: number },
+): string => {
+  const source = query.source?.join(',') ?? ''
+  const offset = query.offset ?? 0
+  const limit = query.limit ?? 0
+  return `${retrievalRecordId}|${source}|${offset}|${limit}`
 }
 
-let state: ChatStoreState = { ...initialState }
+const buildPageReplayKey = (query: PageReplayQuery): string => {
+  const kbId = query.kbId ?? ''
+  const maxChars = query.maxChars ?? ''
+  return `${query.documentId}|${query.page}|${kbId}|${maxChars}`
+}
+
+const createMessageId = (prefix: string, runId: string): string => `${prefix}_${runId}`
 
 export const chatStore = {
   getState: () => state,
@@ -25,18 +84,179 @@ export const chatStore = {
   },
 
   // --- Actions (M1 minimal) ---
+  send: async (
+    query: string,
+    opts: { debug?: boolean; kbId?: string; context?: ChatContextInput } = {},
+  ): Promise<ChatNormalizedResult> => {
+    const input: ChatSendInput = {
+      query,
+      kbId: opts.kbId,
+      debug: opts.debug,
+      context: opts.context,
+    }
+    const result = await sendChat(input)
+    const runId = result.run.runId
+    const userMessage = {
+      id: createMessageId('user', runId),
+      role: 'user' as const,
+      text: query,
+      runId,
+    }
+    const assistantMessage = {
+      id: createMessageId('assistant', runId),
+      role: 'assistant' as const,
+      text: result.answer ?? '',
+      runId,
+    }
 
-  appendResult: (result: ChatNormalizedResult) => {
-    state = { ...state, results: [...state.results, result] }
+    state = {
+      ...state,
+      activeRunId: runId,
+      runsById: { ...state.runsById, [runId]: result },
+      messages: [...state.messages, userMessage, assistantMessage],
+    }
+
+    return result
   },
 
   sendChatAndAppend: async (input: ChatSendInput): Promise<ChatNormalizedResult> => {
-    const result = await sendChat(input)
-    state = { ...state, results: [...state.results, result] }
+    return chatStore.send(input.query, {
+      debug: input.debug,
+      kbId: input.kbId,
+      context: input.context,
+    })
+  },
+
+  toggleDebug: () => {
+    state = {
+      ...state,
+      ui: { ...state.ui, debugOpen: !state.ui.debugOpen },
+    }
+  },
+
+  toggleEvidence: () => {
+    state = {
+      ...state,
+      ui: { ...state.ui, evidenceOpen: !state.ui.evidenceOpen },
+    }
+  },
+
+  selectCitation: (nodeId: string) => {
+    state = {
+      ...state,
+      ui: { ...state.ui, evidenceOpen: true },
+      evidence: { ...state.evidence, selectedNodeId: nodeId },
+    }
+  },
+
+  selectNode: (nodeId: string) => {
+    state = {
+      ...state,
+      ui: { ...state.ui, evidenceOpen: true },
+      evidence: { ...state.evidence, selectedNodeId: nodeId },
+    }
+  },
+
+  setRetrievalPaging: (next: { sourceFilter?: string[]; offset?: number; limit?: number }) => {
+    state = {
+      ...state,
+      evidence: {
+        ...state.evidence,
+        sourceFilter: next.sourceFilter ?? state.evidence.sourceFilter,
+        offset: next.offset ?? state.evidence.offset,
+        limit: next.limit ?? state.evidence.limit,
+      },
+    }
+  },
+
+  fetchRetrievalHits: async (
+    retrievalRecordId: string,
+    query: RetrievalHitsQuery = {},
+  ): Promise<RetrievalHitsPaged> => {
+    const effectiveQuery = {
+      source: query.source ?? state.evidence.sourceFilter,
+      offset: query.offset ?? state.evidence.offset,
+      limit: query.limit ?? state.evidence.limit,
+      group: query.group,
+    }
+    const key = buildRetrievalCacheKey(retrievalRecordId, effectiveQuery)
+    const cached = state.cache.retrievalHitsByKey[key]
+    if (cached) return cached
+
+    const result = await loadRetrievalHits(retrievalRecordId, effectiveQuery)
+    state = {
+      ...state,
+      cache: {
+        ...state.cache,
+        retrievalHitsByKey: {
+          ...state.cache.retrievalHitsByKey,
+          [key]: result,
+        },
+      },
+    }
+    return result
+  },
+
+  fetchNodePreview: async (
+    nodeId: string,
+    query: NodePreviewQuery = {},
+  ): Promise<NodePreview> => {
+    const cached = state.cache.nodePreviewById[nodeId]
+    if (cached) return cached
+    const result = await loadNodePreview(nodeId, query)
+    state = {
+      ...state,
+      cache: {
+        ...state.cache,
+        nodePreviewById: {
+          ...state.cache.nodePreviewById,
+          [nodeId]: result,
+        },
+      },
+    }
+    return result
+  },
+
+  fetchPageReplay: async (query: PageReplayQuery): Promise<PageReplay> => {
+    const key = buildPageReplayKey(query)
+    const cached = state.cache.pageReplayByKey[key]
+    if (cached) return cached
+    const result = await loadPageReplay(query)
+    state = {
+      ...state,
+      cache: {
+        ...state.cache,
+        pageReplayByKey: {
+          ...state.cache.pageReplayByKey,
+          [key]: result,
+        },
+      },
+    }
+    return result
+  },
+
+  fetchPageReplayByNode: async (
+    nodeId: string,
+    query: PageReplayByNodeQuery = {},
+  ): Promise<PageReplay> => {
+    const key = `node:${nodeId}|${query.kbId ?? ''}|${query.maxChars ?? ''}`
+    const cached = state.cache.pageReplayByKey[key]
+    if (cached) return cached
+    const result = await loadPageReplayByNode(nodeId, query)
+    state = {
+      ...state,
+      cache: {
+        ...state.cache,
+        pageReplayByKey: {
+          ...state.cache.pageReplayByKey,
+          [key]: result,
+        },
+      },
+    }
     return result
   },
 
   reset: () => {
-    state = { ...initialState }
+    state = createInitialState()
   },
 }

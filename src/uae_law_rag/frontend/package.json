@@ -13,6 +13,7 @@
     "gate:f1-domain": "node scripts/gate_f1_domain_imports.mjs && pnpm typecheck",
     "gate:f1-ui": "node scripts/gate_f1_ui_no_snake_case.mjs && pnpm typecheck",
     "gate:f2-endpoints": "node --experimental-strip-types --experimental-specifier-resolution=node scripts/gate_f2_endpoints.mjs && pnpm typecheck",
+    "gate:f4-store": "node scripts/gate_f4_import_rules.mjs && pnpm test && pnpm typecheck",
     "gate:f0": "pnpm lint && pnpm typecheck && pnpm build",
     "preview": "vite preview"
   },
