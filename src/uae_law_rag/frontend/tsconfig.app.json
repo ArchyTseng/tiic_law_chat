@@ -30,7 +30,8 @@
     },
     // UI/状态层经常需要这些类型
     "types": [
-      "vite/client"
+      "vite/client",
+      "vitest/globals"
     ]
   },
   "include": [

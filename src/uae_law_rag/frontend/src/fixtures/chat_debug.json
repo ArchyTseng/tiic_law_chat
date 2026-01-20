@@ -1,0 +1,149 @@
+{
+  "conversation_id": "c9a2b1b8-2c74-4f7a-9d8a-7c2c728c4b0a",
+  "message_id": "3d8e142d-2f2c-4c27-8611-0cf2af8b85a2",
+  "kb_id": "uae-law",
+  "status": "success",
+  "answer": "Sample answer text.",
+  "citations": [
+    {
+      "node_id": "d8b1c54b-7d55-4c5f-b8b3-2fdb0f3f90b1",
+      "rank": 1,
+      "quote": "Sample evidence quote.",
+      "page": 12,
+      "article_id": "Art-12",
+      "section_path": "Title/Chapter 1",
+      "locator": {
+        "page": 12,
+        "start_offset": 120,
+        "end_offset": 180,
+        "article_id": "Art-12",
+        "section_path": "Title/Chapter 1",
+        "source": "keyword"
+      }
+    }
+  ],
+  "evaluator": {
+    "status": "pass",
+    "rule_version": "v1",
+    "warnings": []
+  },
+  "timing_ms": {
+    "total_ms": 1234,
+    "retrieval_ms": 210,
+    "generation_ms": 900
+  },
+  "trace_id": "trace-123",
+  "request_id": "req-456",
+  "debug": {
+    "trace_id": "trace-123",
+    "request_id": "req-456",
+    "records": {
+      "retrieval_record_id": "retrieval-001",
+      "generation_record_id": "generation-002",
+      "evaluation_record_id": "evaluation-003",
+      "document_id": "doc-100"
+    },
+    "timing_ms": {
+      "retrieval_ms": 210,
+      "generation_ms": 900,
+      "total_ms": 1234
+    },
+    "gate": {
+      "retrieval": {
+        "passed": true,
+        "status": "pass",
+        "reasons": []
+      },
+      "generation": {
+        "passed": true,
+        "status": "pass",
+        "reasons": []
+      },
+      "evaluator": {
+        "passed": true,
+        "status": "pass",
+        "reasons": []
+      }
+    },
+    "hits_count": 3,
+    "provider_snapshot": {
+      "model": "test-model"
+    },
+    "evidence": {
+      "version": "v1",
+      "document_ids": [
+        "doc-100"
+      ],
+      "by_source": {
+        "keyword": {
+          "by_document": {
+            "doc-100": {
+              "file_id": null,
+              "pages": {
+                "12": [
+                  "d8b1c54b-7d55-4c5f-b8b3-2fdb0f3f90b1"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "caps": {
+        "max_documents": 50,
+        "max_nodes_per_document": 20,
+        "max_pages_per_document": 10
+      },
+      "meta": {
+        "note": "fixture",
+        "stats": {
+          "dropped_missing_document_id": 0,
+          "dropped_missing_node_id": 0,
+          "unknown_page_count": 0,
+          "deduped_node_count": 0,
+          "total_hits_in": 3,
+          "total_hits_used": 3,
+          "counts_by_source": {
+            "keyword": 3
+          }
+        }
+      }
+    },
+    "prompt_debug": {
+      "version": "v1",
+      "mode": "window",
+      "context_items": [
+        {
+          "node_id": "d8b1c54b-7d55-4c5f-b8b3-2fdb0f3f90b1",
+          "source": "keyword",
+          "used": "window",
+          "chars": 60
+        }
+      ],
+      "totals": {
+        "nodes_used": 1,
+        "total_chars": 60
+      }
+    },
+    "keyword_stats": {
+      "raw_query": "sample",
+      "keywords_list": [
+        "sample"
+      ],
+      "items": [
+        {
+          "keyword": "sample",
+          "gt_total": 1,
+          "kw_total": 1,
+          "overlap": 1,
+          "recall": 1,
+          "precision": 1,
+          "capped": false
+        }
+      ],
+      "timing_ms": {
+        "total_ms": 1
+      },
+      "meta": {}
+    }
+  }
+}
