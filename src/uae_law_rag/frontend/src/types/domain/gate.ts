@@ -3,9 +3,16 @@
 // 边界: 不推断 gate 逻辑，仅承载服务端摘要。
 // 上游关系: services/chat_service.ts。
 // 下游关系: UI 解释层。
+export type GateStatus = 'pass' | 'partial' | 'fail' | 'skipped'
+
+export type GateDecision = {
+  status?: GateStatus | string
+  passed?: boolean
+  reasons?: string[]
+}
+
 export type GateSummary = {
-  retrieval?: Record<string, unknown>
-  generation?: Record<string, unknown>
-  evaluator?: Record<string, unknown>
-  [key: string]: unknown
+  retrieval?: GateDecision
+  generation?: GateDecision
+  evaluator?: GateDecision
 }

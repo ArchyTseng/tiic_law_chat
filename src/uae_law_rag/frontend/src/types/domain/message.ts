@@ -3,6 +3,7 @@
 // 边界: 不包含 UI 展示细节。
 // 上游关系: services/chat_service.ts。
 // 下游关系: pages/chat 与 ui 视图模型。
+import type { EvidenceLocator } from '@/types/domain/evidence'
 import type { DebugEnvelope } from '@/types/domain/run'
 
 export type ChatStatus = 'success' | 'blocked' | 'partial' | 'failed'
@@ -22,7 +23,7 @@ export type Citation = {
   page?: number
   articleId?: string
   sectionPath?: string
-  locator?: Record<string, unknown>
+  locator?: EvidenceLocator
 }
 
 export type ChatMessage = {
@@ -37,7 +38,7 @@ export type ChatResult = {
   messageId: string
   kbId: string
   status: ChatStatus
-  answer: string
+  answer?: string
   citations: Citation[]
   evaluator: EvaluatorSummary
   timingMs?: Record<string, unknown>

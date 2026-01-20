@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.app.json --noEmit",
+    "gate:f1-domain": "node scripts/gate_f1_domain_imports.mjs && pnpm typecheck",
     "gate:f0": "pnpm lint && pnpm typecheck && pnpm build",
     "preview": "vite preview"
   },

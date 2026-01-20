@@ -6,28 +6,39 @@
 import type { GateSummary } from '@/types/domain/gate'
 import type { StepRecord } from '@/types/domain/step'
 
-export type DebugRecords = {
+export type RunRecords = {
   retrievalRecordId?: string
   generationRecordId?: string
   evaluationRecordId?: string
   documentId?: string
-  [key: string]: unknown
+}
+
+export type RunTiming = {
+  totalMs?: number
+  stages?: Record<string, number>
 }
 
 export type DebugEnvelope = {
   traceId: string
   requestId: string
-  records: DebugRecords
+  records: RunRecords
   timingMs?: Record<string, unknown>
   gate?: GateSummary
-  [key: string]: unknown
+  providerSnapshot?: Record<string, unknown>
+  hitsCount?: number
 }
+
+export type RunStatus = 'success' | 'degraded' | 'error'
 
 export type RunRecord = {
   runId: string
-  pipelineName?: string
-  status: 'success' | 'degraded' | 'failed'
-  startedAt?: string
-  finishedAt?: string
+  conversationId?: string
+  messageId?: string
+  kbId?: string
+  queryText?: string
+  status: RunStatus
+  timing: RunTiming
+  providerSnapshot?: Record<string, unknown>
+  records?: RunRecords
   steps: StepRecord[]
 }
