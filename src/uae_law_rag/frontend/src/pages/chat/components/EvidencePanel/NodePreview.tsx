@@ -11,10 +11,9 @@ type NodePreviewProps = {
   status: LoadStatus
   selectedNodeId?: string
   nodePreview?: NodePreviewRecord
-  onReplayPage: (documentId: string, page: number) => void
 }
 
-const NodePreview = ({ status, selectedNodeId, nodePreview, onReplayPage }: NodePreviewProps) => {
+const NodePreview = ({ status, selectedNodeId, nodePreview }: NodePreviewProps) => {
   if (!selectedNodeId) {
     return <div className="node-preview">Select a node to preview.</div>
   }
@@ -42,16 +41,6 @@ const NodePreview = ({ status, selectedNodeId, nodePreview, onReplayPage }: Node
           <span>nodeEnd: {nodePreview.endOffset ?? '-'}</span>
         </div>
         <div className="node-preview__excerpt">{nodePreview.textExcerpt}</div>
-        <button
-          className="node-preview__replay"
-          type="button"
-          onClick={() =>
-            nodePreview.page !== undefined && onReplayPage(nodePreview.documentId, nodePreview.page)
-          }
-          disabled={nodePreview.page === undefined}
-        >
-          Replay page
-        </button>
       </div>
     )
   }

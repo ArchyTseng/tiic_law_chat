@@ -1,12 +1,46 @@
-import type { NodePreview, PageReplay, RetrievalHitsPaged } from '@/types/domain/evidence'
-import { NODE_PREVIEW_FAIL_ID, NODE_PREVIEW_OK, PAGE_REPLAY_FAIL_KEY, PAGE_REPLAY_OK, RUN_OK } from '@/fixtures/mock_domain'
+import type { NodePreview, PageReplay, RetrievalHit } from '@/types/domain/evidence'
+import type { HitRow } from '@/types/ui'
+import {
+  NODE_PREVIEW_FAIL_ID,
+  NODE_PREVIEW_OK,
+  PAGE_REPLAY_FAIL_KEY,
+  PAGE_REPLAY_OK,
+  RUN_OK,
+} from '@/fixtures/mock_domain'
 
 export type MockEvidenceMode = 'ok' | 'error'
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
+export type RetrievalHitsResult = {
+  items: HitRow[]
+  total: number
+  offset: number
+  limit: number
+  source?: string
+  availableSources: string[]
+}
+
+const mapHitRow = (hit: RetrievalHit): HitRow => {
+  return {
+    nodeId: hit.nodeId,
+    source: hit.source,
+    rank: hit.rank,
+    score: hit.score,
+    page: hit.locator?.page,
+    articleId: hit.locator?.articleId,
+    sectionPath: hit.locator?.sectionPath,
+    excerpt: hit.locator?.start !== undefined ? `Offsets ${hit.locator.start}-${hit.locator.end}` : undefined,
+  }
+}
+
+const getAvailableSources = (hits: RetrievalHit[]) => {
+  return Array.from(new Set(hits.map((hit) => hit.source).filter((value): value is string => Boolean(value))))
+}
+
 export const createMockEvidenceService = (initialMode: MockEvidenceMode = 'ok') => {
   let mode: MockEvidenceMode = initialMode
+  const allHits = RUN_OK.evidence.retrievalHitsPaged?.items ?? []
 
   return {
     getMode: () => mode,
@@ -28,12 +62,26 @@ export const createMockEvidenceService = (initialMode: MockEvidenceMode = 'ok') 
       }
       return PAGE_REPLAY_OK
     },
-    getRetrievalHits: async (): Promise<RetrievalHitsPaged> => {
+    getRetrievalHits: async (params: {
+      source?: string
+      limit: number
+      offset: number
+    }): Promise<RetrievalHitsResult> => {
       await delay(320)
       if (mode === 'error') {
         throw new Error('Mock retrieval hits error')
       }
-      return RUN_OK.evidence.retrievalHitsPaged ?? { items: [], page: 1, pageSize: 0, total: 0 }
+      const { source, limit, offset } = params
+      const filtered = source ? allHits.filter((hit) => hit.source === source) : allHits
+      const slice = filtered.slice(offset, offset + limit)
+      return {
+        items: slice.map(mapHitRow),
+        total: filtered.length,
+        offset,
+        limit,
+        source,
+        availableSources: getAvailableSources(allHits),
+      }
     },
   }
 }

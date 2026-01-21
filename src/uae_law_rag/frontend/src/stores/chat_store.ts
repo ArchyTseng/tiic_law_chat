@@ -214,14 +214,13 @@ export const createChatStore = (services: { chatService: ChatService; evidenceSe
           nodePreviewStatus: 'loaded',
         },
       })
-    } catch (error) {
+    } catch {
       mergeState({
         evidenceState: {
           ...state.evidenceState,
           nodePreviewStatus: 'failed',
         },
       })
-      raiseNotice(error)
     }
   }
 
@@ -244,14 +243,13 @@ export const createChatStore = (services: { chatService: ChatService; evidenceSe
           pageReplay: replay,
         },
       })
-    } catch (error) {
+    } catch {
       mergeState({
         evidenceState: {
           ...state.evidenceState,
           pageReplayStatus: 'failed',
         },
       })
-      raiseNotice(error)
     }
   }
 
