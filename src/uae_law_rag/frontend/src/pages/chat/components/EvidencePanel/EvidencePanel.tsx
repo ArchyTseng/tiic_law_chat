@@ -10,13 +10,34 @@ import { useState } from 'react'
 type EvidencePanelProps = {
   evidence: EvidenceView
   onSelectNode: (nodeId: string) => void
+  onSelectPage: (documentId: string, page: number) => void
 }
 
-const renderTree = (nodes: EvidenceTreeNode[], onSelectNode: (nodeId: string) => void) => {
+const getPageTarget = (node: EvidenceTreeNode) => {
+  const locator = node.locator
+  if (locator?.documentId && typeof locator.page === 'number') {
+    return { documentId: locator.documentId, page: locator.page }
+  }
+  if (!node.id.startsWith('page:')) return null
+  const parts = node.id.split(':')
+  if (parts.length < 3) return null
+  const documentId = parts[1]
+  const pageKey = parts.slice(2).join(':')
+  const page = Number(pageKey)
+  if (!documentId || Number.isNaN(page)) return null
+  return { documentId, page }
+}
+
+const renderTree = (
+  nodes: EvidenceTreeNode[],
+  onSelectNode: (nodeId: string) => void,
+  onSelectPage: (documentId: string, page: number) => void,
+) => {
   return (
     <ul className="evidence-tree">
       {nodes.map((node) => {
         const isLeaf = !node.children || node.children.length === 0
+        const pageTarget = !isLeaf ? getPageTarget(node) : null
         return (
           <li key={node.id} className="evidence-tree__node">
             {isLeaf ? (
@@ -27,10 +48,18 @@ const renderTree = (nodes: EvidenceTreeNode[], onSelectNode: (nodeId: string) =>
               >
                 {node.label}
               </button>
+            ) : pageTarget ? (
+              <button
+                type="button"
+                className="evidence-tree__leaf"
+                onClick={() => onSelectPage(pageTarget.documentId, pageTarget.page)}
+              >
+                {node.label}
+              </button>
             ) : (
               <div className="evidence-tree__branch">{node.label}</div>
             )}
-            {node.children && node.children.length > 0 && renderTree(node.children, onSelectNode)}
+            {node.children && node.children.length > 0 && renderTree(node.children, onSelectNode, onSelectPage)}
           </li>
         )
       })}
@@ -38,7 +67,7 @@ const renderTree = (nodes: EvidenceTreeNode[], onSelectNode: (nodeId: string) =>
   )
 }
 
-const EvidencePanel = ({ evidence, onSelectNode }: EvidencePanelProps) => {
+const EvidencePanel = ({ evidence, onSelectNode, onSelectPage }: EvidencePanelProps) => {
   const [treeOpen, setTreeOpen] = useState(false)
   const hasTree = Boolean(evidence.evidenceTree && evidence.evidenceTree.length > 0)
 
@@ -53,7 +82,7 @@ const EvidencePanel = ({ evidence, onSelectNode }: EvidencePanelProps) => {
       </button>
       {treeOpen ? (
         hasTree ? (
-          renderTree(evidence.evidenceTree ?? [], onSelectNode)
+          renderTree(evidence.evidenceTree ?? [], onSelectNode, onSelectPage)
         ) : (
           <div className="evidence-panel__empty">No evidence tree available.</div>
         )

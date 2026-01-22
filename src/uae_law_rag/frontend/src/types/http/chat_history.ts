@@ -1,3 +1,4 @@
+import type { CitationViewDTO, EvaluatorSummaryDTO } from '@/types/http/chat_response'
 import type { JsonValue } from '@/types/http/json'
 
 export type ChatHistoryMessageDTO = {
@@ -7,6 +8,11 @@ export type ChatHistoryMessageDTO = {
   answer: string
   status: string
   created_at?: string | null
+  retrieval_record_id?: string | null
+  generation_record_id?: string | null
+  evaluation_record_id?: string | null
+  citations?: CitationViewDTO[]
+  evaluator?: EvaluatorSummaryDTO | null
 }
 
 export type ConversationSummaryDTO = {

@@ -148,8 +148,11 @@ body {
 }
 
 .sidebar__section {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+  flex: 1;
+  min-height: 0;
 }
 
 .sidebar__label {
@@ -157,6 +160,29 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.12em;
   color: #8f877c;
+}
+
+.sidebar__list {
+  display: grid;
+  gap: 8px;
+  overflow-y: auto;
+  padding-right: 4px;
+  min-height: 0;
+  scrollbar-color: #6a6258 #1f1d1b;
+}
+
+.sidebar__list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.sidebar__list::-webkit-scrollbar-track {
+  background: #1f1d1b;
+}
+
+.sidebar__list::-webkit-scrollbar-thumb {
+  background: #6a6258;
+  border-radius: 999px;
+  border: 2px solid #1f1d1b;
 }
 
 .sidebar__item {
@@ -179,6 +205,33 @@ body {
   background: #2e2a25;
 }
 
+.sidebar__user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid #2d2a26;
+  margin-top: auto;
+}
+
+.sidebar__user-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #2b2723;
+  border: 1px solid #3a352f;
+  display: grid;
+  place-items: center;
+  color: #e6e1db;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.sidebar__user-name {
+  font-size: 13px;
+  color: #efece7;
+}
+
 [data-collapsed='true'] .app-shell__sidebar {
   width: 72px;
 }
@@ -186,6 +239,7 @@ body {
 [data-collapsed='true'] .sidebar__logo,
 [data-collapsed='true'] .sidebar__search,
 [data-collapsed='true'] .sidebar__label,
+[data-collapsed='true'] .sidebar__user,
 [data-collapsed='true'] .sidebar__item {
   display: none;
 }

@@ -7,6 +7,7 @@
 import type { NodePreview, PageReplay } from '@/types/domain/evidence'
 import type { ChatMessageView, ChatSessionView, EvidenceView, SystemNoticeView } from '@/types/ui'
 import { toEvaluatorNotice, toEvaluatorStepNotice, toGateNotice, toSystemNotice } from '@/services/errors'
+import { buildEvidenceTreeFromHits } from '@/utils/evidence_tree'
 
 export type EvidenceLoadStatus = 'idle' | 'loading' | 'failed' | 'loaded'
 
@@ -343,11 +344,13 @@ export const createChatStore = (services: { chatService: ChatService; evidenceSe
         limit,
         offset,
       })
+      const evidenceTree = state.evidence.evidenceTree ?? buildEvidenceTreeFromHits(hits.items)
       setState({
         ...state,
         evidence: {
           ...state.evidence,
           retrievalHits: hits,
+          evidenceTree,
         },
         evidenceState: {
           ...state.evidenceState,

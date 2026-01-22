@@ -7,7 +7,8 @@
 import { apiClient } from '@/api/client'
 import { normalizeChatResponse } from '@/services/normalize_chat'
 import type { ChatNormalizedResult, ChatSendInput } from '@/types/domain/chat'
-import type { EvidenceCitation } from '@/types/domain/evidence'
+import type { EvidenceCitation, EvidenceLocator } from '@/types/domain/evidence'
+import type { EvaluatorSummary } from '@/types/domain/message'
 import type { EvaluatorStatus, ChatRequestDTO } from '@/types/http/chat_response'
 import type { ChatHistoryMessageDTO } from '@/types/http/chat_history'
 import type {
@@ -95,6 +96,24 @@ const mapActiveRun = (result: ChatNormalizedResult, evaluatorStatus?: EvaluatorS
   }
 }
 
+const mapHistoryRunStatus = (status?: string): ActiveRunView['status'] => {
+  const normalized = (status ?? '').toLowerCase()
+  if (normalized === 'failed') return 'error'
+  if (normalized === 'partial' || normalized === 'blocked') return 'degraded'
+  return 'success'
+}
+
+const mapHistoryEvaluatorSummary = (
+  evaluator?: ChatHistoryMessageDTO['evaluator'] | null,
+): EvaluatorSummary | undefined => {
+  if (!evaluator) return undefined
+  return {
+    status: evaluator.status,
+    ruleVersion: evaluator.rule_version,
+    warnings: evaluator.warnings ?? [],
+  }
+}
+
 const mapCitations = (citations: EvidenceCitation[]): CitationView[] => {
   return citations.map((citation) => ({
     nodeId: citation.nodeId,
@@ -107,6 +126,69 @@ const mapCitations = (citations: EvidenceCitation[]): CitationView[] => {
       end: citation.locator.end,
     },
   }))
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === 'object' && value !== null
+}
+
+const readNumber = (record: Record<string, unknown>, key: string): number | undefined => {
+  const value = record[key]
+  return typeof value === 'number' ? value : undefined
+}
+
+const readString = (record: Record<string, unknown>, key: string): string | undefined => {
+  const value = record[key]
+  return typeof value === 'string' ? value : undefined
+}
+
+const mapHistoryCitationLocator = (
+  citation: NonNullable<ChatHistoryMessageDTO['citations']>[number],
+): EvidenceLocator => {
+  const rawLocator = isRecord(citation.locator) ? citation.locator : {}
+  const page = typeof citation.page === 'number' ? citation.page : readNumber(rawLocator, 'page')
+  const start = readNumber(rawLocator, 'start_offset') ?? readNumber(rawLocator, 'start')
+  const end = readNumber(rawLocator, 'end_offset') ?? readNumber(rawLocator, 'end')
+  const documentId = readString(rawLocator, 'document_id')
+  const locator: EvidenceLocator = {}
+
+  if (documentId) locator.documentId = documentId
+  if (page !== undefined) locator.page = page
+  if (start !== undefined) locator.start = start
+  if (end !== undefined) locator.end = end
+
+  const source = readString(rawLocator, 'source')
+  if (source) locator.source = source
+
+  const articleId =
+    typeof citation.article_id === 'string' ? citation.article_id : readString(rawLocator, 'article_id')
+  if (articleId) locator.articleId = articleId
+
+  const sectionPath =
+    typeof citation.section_path === 'string'
+      ? citation.section_path
+      : readString(rawLocator, 'section_path')
+  if (sectionPath) locator.sectionPath = sectionPath
+
+  return locator
+}
+
+const mapHistoryCitations = (citations?: ChatHistoryMessageDTO['citations']): CitationView[] => {
+  if (!citations || citations.length === 0) return []
+  return citations.map((citation) => {
+    const locator = mapHistoryCitationLocator(citation)
+    return {
+      nodeId: citation.node_id,
+      locator,
+      onClickRef: {
+        nodeId: citation.node_id,
+        documentId: locator.documentId,
+        page: locator.page,
+        start: locator.start,
+        end: locator.end,
+      },
+    }
+  })
 }
 
 const mapDebug = (result: ChatNormalizedResult): ChatDebugView => {
@@ -128,6 +210,7 @@ const buildRetrievalView = (hits?: ChatNormalizedResult['evidence']['retrievalHi
       source: item.source,
       rank: item.rank,
       score: item.score,
+      documentId: item.locator?.documentId,
       page: item.locator?.page,
       articleId: item.locator?.articleId,
       sectionPath: item.locator?.sectionPath,
@@ -207,18 +290,56 @@ const buildHistoryFromRecords = (records: ChatHistoryMessageDTO[]): ChatMessageV
         id: `assistant_${record.message_id}`,
         role: 'assistant',
         content: record.answer,
+        runId: record.message_id,
+        citations: mapHistoryCitations(record.citations),
+        evaluatorBadge: mapEvaluatorBadge(record.evaluator?.status),
       })
     }
   }
   return items
 }
 
+const buildActiveRunFromHistory = (records: ChatHistoryMessageDTO[]): ActiveRunView | undefined => {
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index]
+    if (!record) continue
+    if (
+      !record.retrieval_record_id &&
+      !record.generation_record_id &&
+      (!record.citations || record.citations.length === 0) &&
+      !record.answer
+    ) {
+      continue
+    }
+    return {
+      runId: record.message_id,
+      conversationId: record.conversation_id,
+      status: mapHistoryRunStatus(record.status),
+      answer: record.answer,
+      evaluatorBadge: mapEvaluatorBadge(record.evaluator?.status),
+      evaluatorSummary: mapHistoryEvaluatorSummary(record.evaluator),
+      records: {
+        retrievalRecordId: record.retrieval_record_id ?? undefined,
+        generationRecordId: record.generation_record_id ?? undefined,
+        evaluationRecordId: record.evaluation_record_id ?? undefined,
+      },
+      steps: [],
+    }
+  }
+  return undefined
+}
+
 const buildHistorySnapshot = (records: ChatHistoryMessageDTO[]): ChatServiceSnapshot => {
   const historyItems = buildHistoryFromRecords(records)
+  const activeRun = buildActiveRunFromHistory(records)
+  const activeRecord = activeRun
+    ? records.find((record) => record.message_id === activeRun.runId)
+    : undefined
   return {
     chat: {
       history: { items: historyItems },
-      citations: [],
+      citations: activeRecord ? mapHistoryCitations(activeRecord.citations) : [],
+      activeRun,
       debug: { enabled: false },
     },
     evidence: buildEmptyEvidenceView(),

@@ -154,6 +154,15 @@ const ChatPageContainer = ({ conversationId, onTopbarActionsChange, onConversati
     setPageReplayOpenByConversation((prev) => ({ ...prev, [activeConversationId]: false }))
   }, [activeConversationId])
 
+  const handleSelectPageFromTree = useCallback(
+    (documentId: string, page: number) => {
+      if (!documentId || !page) return
+      setPageReplayOpenByConversation((prev) => ({ ...prev, [activeConversationId]: true }))
+      void store.fetchPageReplay(documentId, page)
+    },
+    [activeConversationId, store],
+  )
+
   const handleInjectError = useCallback(() => {
     if (serviceMode === 'live') {
       void store.triggerBackendError({ conversationId: 'missing-conversation' })
@@ -231,6 +240,7 @@ const ChatPageContainer = ({ conversationId, onTopbarActionsChange, onConversati
       onToggleDrawer={handleToggleEvidenceDrawer}
       onSelectCitation={handleSelectCitation}
       onSelectNode={store.fetchNodePreview}
+      onSelectPage={handleSelectPageFromTree}
       onChangeHitsSource={handleChangeHitsSource}
       onOpenPageReplay={handleOpenPageReplay}
       onClosePageReplay={handleClosePageReplay}

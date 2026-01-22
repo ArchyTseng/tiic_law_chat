@@ -116,6 +116,7 @@ const mapHitRow = (hit: RetrievalHit): HitRow => {
     source: hit.source,
     rank: hit.rank,
     score: hit.score,
+    documentId: hit.locator?.documentId,
     page: hit.locator?.page,
     articleId: hit.locator?.articleId,
     sectionPath: hit.locator?.sectionPath,

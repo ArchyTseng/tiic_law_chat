@@ -42,6 +42,7 @@ type ChatPageProps = {
   onToggleDrawer: (open?: boolean) => void
   onSelectCitation: (nodeId: string) => void
   onSelectNode: (nodeId: string) => void
+  onSelectPage: (documentId: string, page: number) => void
   onChangeHitsSource: (source: string) => void
   onOpenPageReplay: () => void
   onClosePageReplay: () => void
@@ -57,6 +58,7 @@ const ChatPage = ({
   onToggleDrawer,
   onSelectCitation,
   onSelectNode,
+  onSelectPage,
   onChangeHitsSource,
   onOpenPageReplay,
   onClosePageReplay,
@@ -111,6 +113,7 @@ const ChatPage = ({
           <EvidencePanel
             evidence={evidence}
             onSelectNode={onSelectNode}
+            onSelectPage={onSelectPage}
           />
         </div>
       </Drawer>

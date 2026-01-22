@@ -129,18 +129,26 @@ const AppShell = () => {
         {conversationItems.length > 0 ? (
           <div className="sidebar__section">
             <div className="sidebar__label">Conversations</div>
-            {conversationItems.map((item) => (
-              <button
-                key={item.id}
-                className={`sidebar__item ${selectedNavId === item.id ? 'sidebar__item--active' : ''}`}
-                type="button"
-                onClick={() => setSelectedNavId(item.id)}
-              >
-                {item.label}
-              </button>
-            ))}
+            <div className="sidebar__list">
+              {conversationItems.map((item) => (
+                <button
+                  key={item.id}
+                  className={`sidebar__item ${selectedNavId === item.id ? 'sidebar__item--active' : ''}`}
+                  type="button"
+                  onClick={() => setSelectedNavId(item.id)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
           </div>
         ) : null}
+        <div className="sidebar__user">
+          <div className="sidebar__user-avatar" aria-hidden="true">
+            U
+          </div>
+          <div className="sidebar__user-name">User Name</div>
+        </div>
       </aside>
       <main className="app-shell__main">
         <header className="app-shell__topbar">

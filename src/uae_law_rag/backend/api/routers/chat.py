@@ -37,7 +37,7 @@ from uae_law_rag.backend.api.schemas_http.chat import (
     CitationView,
     EvaluatorSummary,
 )
-from uae_law_rag.backend.db.repo import ConversationRepo, MessageRepo
+from uae_law_rag.backend.db.repo import ConversationRepo, EvaluatorRepo, GenerationRepo, MessageRepo
 from uae_law_rag.backend.kb.repo import MilvusRepo
 from uae_law_rag.backend.schemas.audit import TraceContext
 from uae_law_rag.backend.services.chat_service import chat
@@ -118,6 +118,28 @@ def _build_citations(raw: Any) -> List[CitationView]:
                 v.section_path = str(loc.get("section_path"))
             items.append(v)
     return items  # docstring: 返回 citations 列表
+
+
+def _extract_citation_items(raw: Any) -> List[Dict[str, Any]]:
+    """
+    [职责] 从 generation_record.citations 中提取 citation items 列表。
+    [边界] 仅处理 dict/list；其他类型返回空。
+    [上游关系] list_chat_messages 调用。
+    [下游关系] history 响应字段 citations。
+    """
+    if raw is None:
+        return []  # docstring: 空 citations 回退
+    if isinstance(raw, dict):
+        items = raw.get("items")
+        if isinstance(items, list):
+            return [dict(item) for item in items if isinstance(item, dict)]  # docstring: items 列表
+        nodes = raw.get("nodes")
+        if isinstance(nodes, list):
+            return [{"node_id": node_id} for node_id in nodes]  # docstring: nodes 兜底
+        return []  # docstring: dict 无 items/nodes
+    if isinstance(raw, list):
+        return [dict(item) for item in raw if isinstance(item, dict)]  # docstring: list 直接使用
+    return []  # docstring: 其他类型回退空
 
 
 def _build_debug_envelope(
@@ -319,6 +341,8 @@ async def list_chat_messages(
     """
     try:
         repo = MessageRepo(session)  # docstring: 装配 message repo
+        generation_repo = GenerationRepo(session)  # docstring: 装配 generation repo
+        evaluator_repo = EvaluatorRepo(session)  # docstring: 装配 evaluator repo
         messages = await repo.list_history(
             conversation_id=str(conversation_id),
             limit=int(limit),
@@ -334,6 +358,25 @@ async def list_chat_messages(
     items: List[Dict[str, Any]] = []
     for msg in reversed(messages):
         created_at = getattr(msg, "created_at", None)
+        generation_record_id = None
+        retrieval_record_id = None
+        citations: List[Dict[str, Any]] = []
+        evaluator_summary: Optional[Dict[str, Any]] = None
+
+        generation_record = await generation_repo.get_record_by_message(str(msg.id))
+        if generation_record is not None:
+            generation_record_id = str(generation_record.id)
+            retrieval_record_id = str(getattr(generation_record, "retrieval_record_id", "") or "") or None
+            citations = _extract_citation_items(getattr(generation_record, "citations", None))
+
+        evaluation_record = await evaluator_repo.get_by_message_id(str(msg.id))
+        if evaluation_record is not None:
+            evaluator_summary = {
+                "status": str(evaluation_record.status),
+                "rule_version": str(evaluation_record.rule_version or "v0"),
+                "warnings": [],
+            }
+
         items.append(
             {
                 "conversation_id": str(msg.conversation_id),
@@ -342,6 +385,11 @@ async def list_chat_messages(
                 "answer": str(msg.response or ""),
                 "status": str(msg.status),
                 "created_at": created_at.isoformat() if created_at else None,
+                "retrieval_record_id": retrieval_record_id,
+                "generation_record_id": generation_record_id,
+                "evaluation_record_id": str(evaluation_record.id) if evaluation_record is not None else None,
+                "citations": citations,
+                "evaluator": evaluator_summary,
             }
         )  # docstring: 输出消息摘要
     return items  # docstring: 返回历史列表

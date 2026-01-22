@@ -11,6 +11,7 @@ export type HitRow = {
   rank?: number
   score?: number
   source?: string
+  documentId?: string
   page?: number
   articleId?: string
   sectionPath?: string

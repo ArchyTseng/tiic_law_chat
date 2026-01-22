@@ -424,10 +424,18 @@ async def get_retrieval_record(
         else:
             page_hits = filtered_hits[offset_i : offset_i + limit_i]
 
+        node_ids = [str(getattr(hit, "node_id", "") or "").strip() for hit in page_hits]
+        node_docs = await repo.resolve_node_documents([nid for nid in node_ids if nid])
+
         hit_views: List[HitSummary] = []
         hits_by_source: Dict[str, List[HitSummary]] = {}
         for hit in page_hits:
             src = _coerce_hit_source(getattr(hit, "source", None))
+            locator = _build_locator_from_hit(hit)
+            node_meta = node_docs.get(str(getattr(hit, "node_id", "") or "").strip())
+            if node_meta:
+                locator["document_id"] = node_meta.get("document_id")
+                locator["file_id"] = node_meta.get("file_id")
             hit_views.append(
                 HitSummary(
                     node_id=NodeId(str(hit.node_id)),
@@ -435,7 +443,7 @@ async def get_retrieval_record(
                     rank=int(hit.rank),
                     score=float(getattr(hit, "score", 0.0) or 0.0),
                     excerpt=str(hit.excerpt) if getattr(hit, "excerpt", None) else None,
-                    locator=_build_locator_from_hit(hit),
+                    locator=locator,
                 )
             )  # docstring: 映射 HitSummary
 
