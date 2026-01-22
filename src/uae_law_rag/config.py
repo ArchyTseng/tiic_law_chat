@@ -60,6 +60,7 @@ class Settings(BaseSettings):
 
     OLLAMA_CHAT_MODEL: str = "qwen2.5:1.5b"
     OLLAMA_EMBED_MODEL: str = "qwen3-embedding:4b"
+    OLLAMA_REQUEST_TIMEOUT_S: int = int(120)
 
     DEVICE: str = "auto"
 

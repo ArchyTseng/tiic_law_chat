@@ -39,12 +39,12 @@ HARD RULES (must follow):
 1) Use ONLY the EVIDENCE provided. Do NOT use general knowledge.
 2) Output MUST be a single JSON object. No markdown. No prose. No code fences.
 3) Output JSON keys MUST be exactly: "answer", "citations". No extra keys.
-4) If EVIDENCE is not "(no evidence)", then citations MUST contain >= 1 VALID citation.
-5) A VALID citation object MUST include:
-   - "node_id": a non-empty string that EXACTLY matches one of VALID NODE IDS
+4) If EVIDENCE is not "(no evidence)", citations MUST contain 3 to 6 VALID citations.
+5) Each citation object MUST include:
+   - "node_id": ...
    - "rank": an integer >= 1
-   - "quote": optional string, copied from EVIDENCE (do not invent)
-6) INVALID citations include (examples): {}, {"rank":1}, {"node_id":""}, {"node_id":"not-in-list"}.
+   - "quote": REQUIRED non-empty string copied EXACTLY from EVIDENCE
+6) The answer MUST be bullet points. Each bullet MUST end with one or more citation markers like [1] or [2][3].
 7) If you cannot produce >= 1 VALID citation, you MUST output exactly:
    {"answer":"","citations":[]}
 """  # docstring: system 角色与证据约束（强约束 + 明确定义 invalid citation）
@@ -52,7 +52,9 @@ HARD RULES (must follow):
 OUTPUT_SCHEMA_EXAMPLE = """{
   "answer": "string grounded only in EVIDENCE",
   "citations": [
-    {"node_id": "ONE_OF_VALID_NODE_IDS", "rank": 1, "quote": "optional short quote copied from EVIDENCE"}
+    {"node_id": "PASTE_AN_ID_FROM_VALID_NODE_IDS_LIST", "rank": 1, "quote": "optional short quote copied from EVIDENCE"},
+    {"node_id": "PASTE_AN_ID_FROM_VALID_NODE_IDS_LIST", "rank": 2, "quote": "optional short quote copied from EVIDENCE"},
+    {"node_id": "PASTE_AN_ID_FROM_VALID_NODE_IDS_LIST", "rank": 3, "quote": "optional short quote copied from EVIDENCE"}
   ]
 }"""  # docstring: 输出结构示例
 
@@ -61,7 +63,8 @@ BAD_OUTPUT_EXAMPLES = """Invalid outputs (do NOT do these):
 2) {"answer":"...","citations":[{"rank":1}]}
 3) {"answer":"...","citations":[{"node_id":"", "rank":1}]}
 4) {"answer":"...","citations":[{"node_id":"not-in-valid-ids", "rank":1}]}
-5) Any extra text outside JSON (markdown, explanations, etc.)
+5) {"answer":"...","citations":[{"node_id":"ONE_OF_VALID_NODE_IDS","rank":1}]}
+6) Any extra text outside JSON (markdown, explanations, etc.)
 """  # docstring: 反例约束（对小模型很关键）
 
 
@@ -487,14 +490,14 @@ def _build_user_prompt(
     [下游关系] messages_snapshot.user。
     """
     evidence_block = _format_evidence_block(evidence_items)  # docstring: evidence 文本块
-    node_ids = ", ".join(valid_node_ids)  # docstring: node_id 列表拼接
-    node_line = f"[{node_ids}]" if node_ids else "[]"  # docstring: node_id 列表文本
+    node_lines = "\n".join([f"- {nid}" for nid in valid_node_ids]) if valid_node_ids else "(empty)"
 
     sections = [
         "EVIDENCE:",
         evidence_block,
         "",
-        f"VALID NODE IDS: {node_line}",
+        "VALID NODE IDS (copy-paste EXACTLY, each is a UUID):",
+        node_lines,
         "",
         "REQUIREMENTS (strict, checklist):",
         "A) Output exactly one JSON object with ONLY keys: answer, citations.",
@@ -505,6 +508,8 @@ def _build_user_prompt(
         "   - rank MUST be an integer >= 1",
         "   - NEVER output empty object {} in citations",
         'C) If you cannot comply, output exactly: {"answer":"","citations":[]}',
+        "D) citations MUST contain EXACTLY 3 items when EVIDENCE is provided.",
+        "E) Each citation.node_id MUST be copied EXACTLY from the VALID NODE IDS list (a UUID). Do NOT output placeholder text like PASTE_AN_ID_FROM_VALID_NODE_IDS_LIST.",
         "",
         "BAD OUTPUT EXAMPLES (do NOT do these):",
         BAD_OUTPUT_EXAMPLES.strip(),

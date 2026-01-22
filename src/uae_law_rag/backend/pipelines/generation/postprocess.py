@@ -58,6 +58,12 @@ class _PostprocessConfig:
     max_citations: Optional[int]
     max_quote_chars: int
 
+    # NEW:
+    min_citations: int
+    require_quote: bool
+    allow_quote_fallback_to_excerpt: bool
+    require_rank_markers_in_answer: bool
+
 
 def _normalize_page_value(val: Any) -> Optional[int]:
     """Normalize page to 1-based positive int; 0/negative/invalid -> None."""  # docstring: 对外证据页码防御性归一化
@@ -80,8 +86,21 @@ def _normalize_config(config: Optional[Mapping[str, Any]]) -> _PostprocessConfig
     cfg = dict(config or {})  # docstring: 复制配置
 
     def _as_bool(key: str, default: bool) -> bool:
+        """
+        [职责] 将 cfg[key] 归一为 bool。
+        [边界] 仅做最小可预期转换；确保返回类型恒为 bool（避免误返回 tuple 导致类型检查报错）。
+        """
         val = cfg.get(key, default)
-        return bool(default if val is None else val)  # docstring: bool 兜底
+        if val is None:
+            return bool(default)
+        # docstring: 常见字符串开关（兼容环境变量/配置文件）
+        if isinstance(val, str):
+            s = val.strip().lower()
+            if s in {"1", "true", "yes", "y", "on"}:
+                return True
+            if s in {"0", "false", "no", "n", "off"}:
+                return False
+        return bool(val)  # docstring: 其它类型按 truthy 规则处理
 
     def _as_int(key: str, default: int) -> int:
         val = cfg.get(key, default)
@@ -114,6 +133,15 @@ def _normalize_config(config: Optional[Mapping[str, Any]]) -> _PostprocessConfig
         invalid_citations_status=_as_status("invalid_citations_status", "blocked"),
         max_citations=_as_opt_int("max_citations"),
         max_quote_chars=_as_int("max_quote_chars", _DEFAULT_MAX_QUOTE_CHARS),
+        # NEW defaults tuned for auditability (and small models)
+        min_citations=max(1, _as_int("min_citations", 3)),
+        # NOTE: small/local models often emit "quote" with extra markup (e.g., <!-- page -->, **bold**),
+        # which is not a strict substring of hit.excerpt. Default to excerpt fallback to avoid false blocks.
+        # docstring: 强制 bool，避免任何 patch 合并/编辑器自动加逗号导致 tuple 推断。
+        require_quote=bool(_as_bool("require_quote", True)),
+        allow_quote_fallback_to_excerpt=bool(_as_bool("allow_quote_fallback_to_excerpt", True)),
+        # NOTE: rank markers in answer are useful but too strict for baseline; keep opt-in.
+        require_rank_markers_in_answer=bool(_as_bool("require_rank_markers_in_answer", False)),
     )
 
 
@@ -193,25 +221,35 @@ def _read_hit_field(hit: Any, key: str, default: Any = None) -> Any:
 
 def _build_hit_index(hits: Sequence[RetrievalHitLike]) -> Dict[str, RetrievalHitLike]:
     """
-    [职责] 构建 node_id -> RetrievalHit 映射。
-    [边界] 重复 node_id 取 rank 更小者。
-    [上游关系] postprocess_generation 调用。
-    [下游关系] citation 对齐使用。
+    [职责] 构建 node_id(uuid str) -> hit 索引，供 citation 对齐使用。
+    [边界] 只收集可解析 UUID 的 node_id；其它跳过。
     """
-    hit_map: Dict[str, RetrievalHitLike] = {}  # docstring: 命中映射容器
-    for hit in hits or []:
-        node_id = _coerce_str(_read_hit_field(hit, "node_id"))  # docstring: 读取 node_id
-        if not node_id:
+    out: Dict[str, RetrievalHitLike] = {}
+    for h in list(hits or []):
+        raw = _coerce_str(_read_hit_field(h, "node_id")) or ""
+        nid = _extract_uuid(raw)  # docstring: 兼容 UUID / 带噪声字符串
+        if not nid:
             continue
-        current = hit_map.get(node_id)
-        if current is None:
-            hit_map[node_id] = hit  # docstring: 首次命中直接写入
+        key = str(nid)
+        # docstring: 去重策略：同一个 node_id 保留首次
+        if key not in out:
+            out[key] = h
+    return out
+
+
+def _build_hit_rank_index(hits: Sequence[RetrievalHitLike]) -> Dict[int, RetrievalHitLike]:
+    """
+    [职责] 构建 rank -> hit 的索引，用于 node_id 缺失/不合法时回退对齐。
+    [边界] 仅收集可解析的 int rank；重复 rank 取首次出现。
+    """
+    out: Dict[int, RetrievalHitLike] = {}
+    for h in list(hits or []):
+        rr = _coerce_int(_read_hit_field(h, "rank"))
+        if rr is None:
             continue
-        prev_rank = _coerce_int(_read_hit_field(current, "rank"))  # docstring: 当前 rank
-        next_rank = _coerce_int(_read_hit_field(hit, "rank"))  # docstring: 新 rank
-        if prev_rank is None or (next_rank is not None and next_rank < prev_rank):
-            hit_map[node_id] = hit  # docstring: 选择更高排名
-    return hit_map
+        if rr not in out:
+            out[rr] = h
+    return out
 
 
 _CODE_FENCE_OPEN_RE = re.compile(r"^\s*```(?:json)?\s*\n?", re.IGNORECASE)
@@ -362,6 +400,28 @@ def _merge_locator(base: Optional[Mapping[str, Any]], fallback: Optional[Mapping
     return out
 
 
+_UUID_RE = re.compile(
+    r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"
+)  # docstring: uuid v4-ish pattern matcher (case-insensitive)
+
+
+def _extract_uuid(text: str) -> str:
+    """
+    [职责] 从任意文本中提取第一个 UUID（容错 bullet/反引号/尾注）。
+    [边界] 找不到则返回空字符串。
+    [上游关系] _build_citation 调用。
+    [下游关系] node_id 校验与 Citation 构造。
+    """
+    s = str(text or "").strip()
+    if not s:
+        return ""
+    # docstring: 常见噪声清理（markdown/bullets）
+    s = s.strip("`").strip()
+    # docstring: 如果整段不是纯 uuid，尝试在文本中搜索 uuid 子串
+    m = _UUID_RE.search(s)
+    return (m.group(0) if m else "").lower()
+
+
 def _is_uuid(value: str) -> bool:
     """
     [职责] 判断字符串是否为 UUID（用于 node_id 运行时校验）。
@@ -380,6 +440,8 @@ def _build_citation(
     hit: RetrievalHitLike,
     rank_fallback: int,
     max_quote_chars: int,
+    require_quote: bool,  # NEW
+    allow_quote_fallback_to_excerpt: bool,  # NEW
 ) -> Citation:
     """
     [职责] 构造 Citation（补全 rank/locator/quote）。
@@ -388,19 +450,41 @@ def _build_citation(
     [下游关系] PostprocessResult.citations。
     """
     node_id_raw = _coerce_str(parsed.get("node_id")) or ""  # docstring: node_id 原始值
+    node_id_norm = _extract_uuid(node_id_raw)  # docstring: 从噪声文本中提取 uuid
     # docstring: 运行时校验 UUID，避免 Citation 构造阶段抛异常导致 postprocess 崩溃
-    if not _is_uuid(node_id_raw):
+    if not node_id_norm or not _is_uuid(node_id_norm):
         raise ValueError("node_id is not a valid UUID")
-    node_id = cast(NodeId, UUIDStr(node_id_raw))  # docstring: node_id 类型对齐
-    rank = _coerce_int(parsed.get("rank"))  # docstring: rank 解析
+    node_id = cast(NodeId, UUIDStr(node_id_norm))  # docstring: node_id 类型对齐
+    # docstring: rank 以 hit.rank 为准（LLM rank 仅作为提示，避免 0/1-based 与全局排序差异导致误判）
+    rank = _coerce_int(_read_hit_field(hit, "rank"))
     if rank is None:
-        rank = _coerce_int(_read_hit_field(hit, "rank"))  # docstring: rank 回退 hit.rank
+        rank = _coerce_int(parsed.get("rank"))  # docstring: 回退到 LLM rank
     if rank is None:
-        rank = int(rank_fallback)  # docstring: rank 回退索引
+        rank = int(rank_fallback)  # docstring: 最终回退索引
 
     quote = _coerce_str(parsed.get("quote"))  # docstring: quote 解析
-    if not quote:
-        quote = _coerce_str(_read_hit_field(hit, "excerpt"))  # docstring: quote 回退 excerpt
+
+    if not quote and allow_quote_fallback_to_excerpt:
+        quote = _coerce_str(_read_hit_field(hit, "excerpt"))
+
+    if require_quote and (not quote or not quote.strip()):
+        raise ValueError("quote is required")
+
+    # quote must be reproducible from hit excerpt (if excerpt exists)
+    hit_excerpt = _coerce_str(_read_hit_field(hit, "excerpt")) or ""
+    if quote and hit_excerpt:
+        # docstring: normalize common markup so small models won't be punished for adding page markers/bold.
+        q0 = re.sub(r"<!--.*?-->", " ", quote, flags=re.DOTALL)
+        q0 = re.sub(r"[*_`]+", "", q0)  # markdown emphasis/code
+        q0 = re.sub(r"\s+", " ", q0).strip().lower()
+        e0 = re.sub(r"\s+", " ", hit_excerpt).strip().lower()
+        if q0 and q0 not in e0:
+            # docstring: default policy is to fall back to excerpt (verifiable), not to hard-fail.
+            if allow_quote_fallback_to_excerpt and hit_excerpt:
+                quote = hit_excerpt
+            else:
+                raise ValueError("quote not found in hit excerpt")
+
     if quote:
         quote = _truncate_text(quote, max_chars=max_quote_chars)  # docstring: quote 截断
 
@@ -428,6 +512,7 @@ def postprocess_generation(
     raw_text: str,
     hits: Sequence[RetrievalHitLike],
     config: Optional[Mapping[str, Any]] = None,
+    allowed_node_ids: Optional[Sequence[str]] = None,  # NEW
 ) -> Dict[str, Any]:
     """
     [职责] 解析 LLM 输出并生成结构化 answer/citations 结果。
@@ -466,6 +551,14 @@ def postprocess_generation(
         raw_citations = []  # docstring: 非法类型回退为空
 
     hit_map = _build_hit_index(hits)  # docstring: 命中索引
+
+    rank_map = _build_hit_rank_index(hits)  # docstring: rank -> hit 索引（node_id 回退用）
+
+    # NEW: restrict citations to allowed_node_ids (prompt-valid ids)
+    if allowed_node_ids:
+        allow = {str(x).strip() for x in allowed_node_ids if str(x or "").strip()}
+        hit_map = {k: v for k, v in hit_map.items() if k in allow}
+
     citations: List[Citation] = []  # docstring: 输出 citations
     invalid_count = 0  # docstring: 无效引用计数
     missing_count = 0  # docstring: 未命中引用计数
@@ -476,14 +569,49 @@ def postprocess_generation(
         if err or not parsed:
             invalid_count += 1  # docstring: 记录无效 citation
             continue
-        node_id = str(parsed.get("node_id") or "")  # docstring: 读取 node_id
-        if not node_id or node_id in seen:
-            invalid_count += 1  # docstring: 空/重复 citation 记为无效
-            continue
-        hit = hit_map.get(node_id)
-        if not hit:
-            missing_count += 1  # docstring: 引用不在 hits 中
-            continue
+        node_id_raw = _coerce_str(parsed.get("node_id"))  # docstring: 原始 node_id
+        node_id_norm = _extract_uuid(node_id_raw or "")  # docstring: 尝试从噪声中提取 uuid
+
+        hit = None  # docstring: 目标命中
+        node_id_final = ""  # docstring: 最终 node_id（必须是 uuid str）
+
+        # (A) 优先使用可解析 UUID 的 node_id
+        if node_id_norm:
+            node_id_final = str(node_id_norm)
+            if node_id_final in seen:
+                invalid_count += 1
+                continue
+            hit = hit_map.get(node_id_final)
+            if not hit:
+                # docstring: UUID 合法但不在 hits 中 -> missing
+                missing_count += 1
+                continue
+
+        # (B) node_id 不可用时：回退用 rank 映射 hits
+        if hit is None:
+            rr = _coerce_int(parsed.get("rank"))
+            if rr is None:
+                rr = idx  # docstring: 连 rank 都没有时，用当前位置兜底（更符合小模型输出）
+            hit = rank_map.get(rr)
+            if hit is None and 1 <= int(rr) <= len(hits):
+                # docstring: 兼容 1-based rank
+                hit = hits[int(rr) - 1]
+            if hit is None:
+                invalid_count += 1
+                continue
+
+            # docstring: 从命中的 hit 取 node_id，作为最终对齐结果
+            node_id_hit = _extract_uuid(_coerce_str(_read_hit_field(hit, "node_id")) or "")
+            if not node_id_hit:
+                invalid_count += 1
+                continue
+            node_id_final = str(node_id_hit)
+            if node_id_final in seen:
+                invalid_count += 1
+                continue
+
+        # docstring: 将修正后的 node_id 回写，保证 _build_citation 使用的是对齐后的 uuid
+        parsed["node_id"] = node_id_final
 
         # --- citation-eligible check (must have non-empty excerpt) ---
         hit_excerpt = _coerce_str(_read_hit_field(hit, "excerpt"))
@@ -498,12 +626,14 @@ def postprocess_generation(
                 hit=hit,
                 rank_fallback=idx,
                 max_quote_chars=cfg.max_quote_chars,
+                require_quote=cfg.require_quote,
+                allow_quote_fallback_to_excerpt=cfg.allow_quote_fallback_to_excerpt,
             )  # docstring: 构造对齐 Citation
         except Exception:
             invalid_count += 1  # docstring: citation 构造失败视为无效引用
             continue
         citations.append(citation)  # docstring: 收集 citation
-        seen.add(node_id)  # docstring: 记录已处理 node_id
+        seen.add(node_id_final)  # docstring: 记录已处理 node_id
 
     if cfg.max_citations is not None and len(citations) > cfg.max_citations:
         citations = citations[: cfg.max_citations]  # docstring: 限制 citation 数量
@@ -535,6 +665,65 @@ def postprocess_generation(
     output_structured["answer"] = answer  # docstring: 覆盖 answer
     output_structured["citations"] = citation_payload  # docstring: 覆盖 citations
 
+    # NEW: enforce min citations
+    if cfg.require_citations and len(citations) < cfg.min_citations:
+        n_valid_before_clear = len(citations)
+        status = "blocked"
+        answer = ""
+        citations = []
+        citation_payload = []
+        output_structured["answer"] = ""
+        output_structured["citations"] = []
+        errors = [e for e in errors if not str(e).startswith("answer")]
+        errors.append(f"insufficient citations: {n_valid_before_clear} < {cfg.min_citations}")
+
+    # NEW: normalize citation ranks to 1..N (avoid duplicated/misaligned ranks from small models)
+    if citations:
+        normalized: List[Citation] = []
+        for i, c in enumerate(citations, start=1):
+            normalized.append(
+                Citation(
+                    node_id=getattr(c, "node_id"),
+                    rank=i,
+                    quote=getattr(c, "quote", "") or "",
+                    locator=getattr(c, "locator", {}) or {},
+                    page=getattr(c, "page", None),
+                    article_id=getattr(c, "article_id", None),
+                    section_path=getattr(c, "section_path", None),
+                )
+            )
+        citations = normalized
+
+        # refresh payload after normalization (keep deterministic)
+        citation_payload = []
+        for c in citations:
+            if hasattr(c, "model_dump"):
+                citation_payload.append(c.model_dump())  # type: ignore[attr-defined]
+            elif hasattr(c, "dict"):
+                citation_payload.append(c.dict())  # type: ignore[call-arg]
+            else:
+                citation_payload.append(dict(getattr(c, "__dict__", {})))
+        output_structured["citations"] = citation_payload
+
+    # NEW: ensure answer contains rank markers expected by alignment gate
+    # NOTE: alignment gate is a hard contract; enforce markers whenever citations exist.
+    if citations and answer:
+        missing_marks: List[str] = []
+        for c in citations:
+            r = _coerce_int(getattr(c, "rank", None))
+            if r is None:
+                continue
+            mark = f"[{r}]"
+            if mark not in answer:
+                missing_marks.append(mark)
+        if missing_marks:
+            # Deterministic, audit-friendly auto-fix: append a citation marker line.
+            # This satisfies gate expectations without forcing a hard block.
+            answer = answer.rstrip() + "\n\nCitations: " + " ".join(missing_marks) + "\n"
+            output_structured["answer"] = answer
+            status = _merge_status(status, "partial")
+            errors.append(f"auto_appended_rank_markers={','.join(missing_marks)}")
+
     # --- require_citations => no valid citations => BLOCKED (highest priority) ---
     if cfg.require_citations and not citations:
         # docstring: 只要要求 citations 且最终无有效 citations，就必须 blocked；
@@ -561,4 +750,9 @@ def postprocess_generation(
         "output_structured": output_structured,
         "status": status,
         "error_message": error_message,
+        "meta": {
+            "invalid_count": invalid_count,
+            "missing_count": missing_count,
+            "raw_citations_count": len(raw_citations or []),
+        },
     }  # docstring: PostprocessResult

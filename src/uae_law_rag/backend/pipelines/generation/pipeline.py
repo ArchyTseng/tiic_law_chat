@@ -68,8 +68,14 @@ RETRY_HINT_PARSE = (
 
 RETRY_HINT_CIT = (
     "Your previous output had no valid citations. "
-    "You MUST include at least 1 citation with node_id from VALID NODE IDS. "
-    "Return JSON only."
+    "You MUST output a single JSON object with keys: answer, citations."
+    "You MUST include EXACTLY 3 citations."
+    "For each citation:"
+    "- node_id MUST be copied EXACTLY from the VALID NODE IDS list above (a UUID string)."
+    "- Do NOT invent IDs."
+    "- Do NOT output placeholder text like ONE_OF_VALID_NODE_IDS or PASTE_AN_ID_FROM_VALID_NODE_IDS_LIST."
+    "- rank must be 1,2,3."
+    "Return ONLY the JSON object. No extra text."
 )
 
 
@@ -537,10 +543,12 @@ async def run_generation_pipeline(
         # docstring: IMPORTANT: hydrate hits from DB to ensure locator fields (page/offset/article/section) are present
         retrieval_repo = RetrievalRepo(session)
         hits_db = await retrieval_repo.list_hits(retrieval_record_id=str(retrieval_record_id))
+        allowed_node_ids = list(messages_snapshot.get("valid_node_ids") or [])
         post_result = postprocess_mod.postprocess_generation(
             raw_text=raw_text,
             hits=hits_db,
             config=cfg.postprocess_config,
+            allowed_node_ids=allowed_node_ids,
         )  # docstring: 解析输出与 citations 对齐
 
     messages_snapshot["postprocess_snapshot"] = {
@@ -548,6 +556,7 @@ async def run_generation_pipeline(
         "error_message": post_result.get("error_message"),
         "citations_count": len(post_result.get("citations") or []),
         "answer_head": str(post_result.get("answer") or "")[:80],
+        "postprocess_meta": post_result.get("meta" or {}),
     }
 
     need_retry = False

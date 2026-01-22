@@ -212,6 +212,11 @@ def _resolve_llm(
     model = _normalize_model_name(model_name)  # docstring: model_name 归一化
     cfg = dict(generation_config or {})  # docstring: generation_config 透传
 
+    # docstring: Ollama 默认超时较短（常见为 30s）；在本地小模型+长 evidence 时容易 ReadTimeout。
+    # LlamaIndex Ollama 支持 request_timeout 参数，用于提升稳定性。
+    if provider_key == "ollama":
+        cfg.setdefault("request_timeout", 300.0)
+
     if provider_key in {"mock", "local", "hash"}:
         response_text = _build_mock_response(messages_snapshot or {})  # docstring: 构造 mock 响应
         return _build_mock_llm(response_text=response_text, model_name=model or "mock")  # docstring: MockLLM
