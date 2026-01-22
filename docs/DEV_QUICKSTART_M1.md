@@ -170,7 +170,7 @@ curl -sS -X POST http://127.0.0.1:18000/api/chat \
   -H 'x-user-id: dev-user' \
   --data-binary @- <<'JSON' | python -m json.tool
 {
-  "query": "Financing",
+  "query": "YOU QUERY TEXT",
   "kb_id": "default",
   "debug": true
 }
