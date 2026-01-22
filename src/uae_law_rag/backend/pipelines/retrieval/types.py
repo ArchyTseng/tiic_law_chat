@@ -32,6 +32,7 @@ def _coerce_int(v: Any) -> Optional[int]:
             return int(v.strip())
     except (TypeError, ValueError):
         return None
+    return None
 
 
 @dataclass(frozen=True)

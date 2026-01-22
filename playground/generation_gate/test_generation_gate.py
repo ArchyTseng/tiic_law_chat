@@ -217,7 +217,7 @@ async def test_generation_gate_end_to_end(session: AsyncSession, monkeypatch: py
     raw_payload = {
         "answer": "Based on evidence, see citations.",
         "citations": [
-            {"node_id": str(nodes[0].id), "rank": 1, "quote": "Scope of application."},
+            {"node_id": str(nodes[0].id), "rank": 1, "quote": "Article 2: Scope of application for the regulation."},
         ],
     }  # docstring: 固定输出 payload
     raw_text = json.dumps(raw_payload, ensure_ascii=True)  # docstring: 固定输出 JSON
@@ -234,7 +234,15 @@ async def test_generation_gate_end_to_end(session: AsyncSession, monkeypatch: py
         "model_provider": "mock",
         "model_name": "mock",
         "generation_config": {"temperature": 0.0},
-        "postprocess_config": {"require_citations": True, "strict_json": True},
+        # docstring: gate uses fixed mock output with 1 citation; align postprocess policy to avoid blocked.
+        "postprocess_config": {
+            "require_citations": True,
+            "strict_json": True,
+            # gate 是“最小闭环”，不应被生产默认策略（min_citations=3）卡死
+            "min_citations": 1,
+            # 可选：保持 quote 强约束（你已改成可验证 quote，因此无需关闭）
+            "require_quote": True,
+        },
     }  # docstring: generation config
 
     bundle = await pipeline_mod.run_generation_pipeline(

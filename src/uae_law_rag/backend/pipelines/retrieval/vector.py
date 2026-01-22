@@ -113,15 +113,12 @@ def _normalize_page(value: Any) -> Optional[int]:
     """
     if value is None:
         return None
-    if isinstance(value, int):
-        return None if value == 0 else value  # docstring: 0 作为未知页码 sentinel，统一归一为 None
-    if isinstance(value, float):
-        v = int(value)
-        return None if v == 0 else v
-    if isinstance(value, str) and value.strip().isdigit():
-        v = int(value.strip())
-        return None if v == 0 else v
-    return None
+    try:
+        v = int(value)  # docstring: 统一转 int（兼容 float/数字字符串）
+    except (TypeError, ValueError):
+        return None
+    # docstring: 对外页码统一为 1-based 正整数；0/负数视为未知
+    return v if v > 0 else None
 
 
 def _normalize_vector_score(raw_score: float, metric_type: MetricType) -> float:
@@ -193,6 +190,14 @@ def _hit_to_candidate(
         end_offset=_coerce_int(payload.get("end_offset")),  # docstring: 结束偏移（如有）
         meta=meta,  # docstring: 透传 meta
     )
+
+
+def normalize_output_fields(output_fields: Optional[Sequence[str]]) -> List[str]:
+    """
+    [职责] 对外公开的 output_fields 规范化函数（保证包含 node_id，去重保序）。
+    [边界] 不校验字段是否存在于 collection；只保证字段集合稳定。
+    """
+    return _normalize_output_fields(output_fields)
 
 
 async def vector_recall(

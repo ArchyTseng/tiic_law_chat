@@ -28,7 +28,7 @@ from uae_law_rag.backend.schemas.generation import (
     GenerationRecord,
     GenerationStatus,
 )
-from uae_law_rag.backend.schemas.ids import GenerationRecordId, MessageId, RetrievalRecordId, UUIDStr
+from uae_law_rag.backend.schemas.ids import GenerationRecordId, MessageId, RetrievalRecordId, UUIDStr, NodeId
 from uae_law_rag.backend.schemas.retrieval import RetrievalBundle, RetrievalHit
 from uae_law_rag.backend.utils.constants import (
     MESSAGE_ID_KEY,
@@ -367,18 +367,45 @@ def _build_citations_payload(citations: Sequence[Citation]) -> CitationsPayload:
     [下游关系] GenerationRecord.citations。
     """
     if not citations:
-        return CitationsPayload()  # docstring: 空 citations 直接返回默认
-    nodes = [c.node_id for c in citations]  # docstring: node_id 列表
-    # docstring: 兼容 pydantic v2 / v1 / dataclass-like
+        return CitationsPayload()
+
+    nodes: List[NodeId] = []
     items: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
     for c in citations:
+        # normalize to dict
         if hasattr(c, "model_dump"):
-            items.append(c.model_dump())  # type: ignore[attr-defined]
+            raw = c.model_dump()
         elif hasattr(c, "dict"):
-            items.append(c.dict())  # type: ignore[call-arg]
+            raw = c.dict()
+        elif isinstance(c, dict):
+            raw = dict(c)
+        elif isinstance(c, str):
+            raw = {"node_id": c}
         else:
-            items.append(dict(getattr(c, "__dict__", {})))
-    return CitationsPayload(version="v1", nodes=nodes, items=items, meta={})  # docstring: payload 组装
+            continue
+
+        node_id_raw = str(raw.get("node_id") or "").strip()
+        if not node_id_raw or node_id_raw in seen:
+            continue
+
+        seen.add(node_id_raw)
+
+        node_id = NodeId(node_id_raw)  # 关键：显式类型收敛
+
+        nodes.append(node_id)
+        items.append(raw)
+
+    if not nodes:
+        return CitationsPayload()
+
+    return CitationsPayload(
+        version="v1",
+        nodes=nodes,  # List[NodeId]
+        items=items,
+        meta={},
+    )
 
 
 def _fallback_messages_snapshot(
@@ -556,7 +583,7 @@ async def run_generation_pipeline(
         "error_message": post_result.get("error_message"),
         "citations_count": len(post_result.get("citations") or []),
         "answer_head": str(post_result.get("answer") or "")[:80],
-        "postprocess_meta": post_result.get("meta" or {}),
+        "postprocess_meta": post_result.get("meta") or {},
     }
 
     need_retry = False
@@ -587,7 +614,10 @@ async def run_generation_pipeline(
             retry_usage = retry_result["usage"]
 
             retry_post_result = postprocess_mod.postprocess_generation(
-                raw_text=retry_raw_text, hits=hits_db, config=cfg.postprocess_config
+                raw_text=retry_raw_text,
+                hits=hits_db,
+                config=cfg.postprocess_config,
+                allowed_node_ids=allowed_node_ids,
             )
             retry_err = str(retry_post_result.get("error_message") or "")
 

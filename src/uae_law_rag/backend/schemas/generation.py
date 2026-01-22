@@ -30,13 +30,13 @@ class Citation(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     node_id: NodeId = Field(...)  # docstring: 证据节点（SQL NodeModel.id）
-    rank: Optional[int] = Field(default=None, ge=0, le=100000)  # docstring: 在 retrieval hits 中的排序位置（可选）
+    rank: Optional[int] = Field(default=None, ge=1, le=100000)  # docstring: 在 retrieval hits 中rank 以 1-based 为准
     quote: str = Field(default="")  # docstring: 可选引用片段（短文本，用于 UI；不应超过少量字符）
     locator: Dict[str, Any] = Field(default_factory=dict)  # docstring: 定位信息（page/article_id/section_path 等）
 
-    page: Optional[int] = Field(...)
-    article_id: Optional[str] = Field(...)
-    section_path: Optional[str] = Field(...)
+    page: Optional[int] = Field(default=None)
+    article_id: Optional[str] = Field(default=None)
+    section_path: Optional[str] = Field(default=None)
 
 
 class CitationsPayload(BaseModel):

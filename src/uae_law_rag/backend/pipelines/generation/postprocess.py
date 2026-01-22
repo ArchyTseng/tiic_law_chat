@@ -555,9 +555,16 @@ def postprocess_generation(
     rank_map = _build_hit_rank_index(hits)  # docstring: rank -> hit 索引（node_id 回退用）
 
     # NEW: restrict citations to allowed_node_ids (prompt-valid ids)
+    allow: Optional[set[str]] = None
     if allowed_node_ids:
-        allow = {str(x).strip() for x in allowed_node_ids if str(x or "").strip()}
+        allow = {str(x).strip().lower() for x in allowed_node_ids if str(x or "").strip()}
         hit_map = {k: v for k, v in hit_map.items() if k in allow}
+        # docstring: 同步过滤 rank_map，避免 rank fallback 绕过 allow-list
+        rank_map = {
+            r: h
+            for r, h in rank_map.items()
+            if _extract_uuid(_coerce_str(_read_hit_field(h, "node_id")) or "") in allow
+        }
 
     citations: List[Citation] = []  # docstring: 输出 citations
     invalid_count = 0  # docstring: 无效引用计数
@@ -604,6 +611,9 @@ def postprocess_generation(
             node_id_hit = _extract_uuid(_coerce_str(_read_hit_field(hit, "node_id")) or "")
             if not node_id_hit:
                 invalid_count += 1
+                continue
+            if allow is not None and node_id_final not in allow:
+                missing_count += 1
                 continue
             node_id_final = str(node_id_hit)
             if node_id_final in seen:

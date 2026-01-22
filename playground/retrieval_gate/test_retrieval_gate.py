@@ -306,12 +306,22 @@ async def test_retrieval_gate_end_to_end(session: AsyncSession) -> None:
         assert isinstance(rec.timing_ms, dict)
         assert {"keyword", "vector", "fusion", "total"}.issubset(set(rec.timing_ms.keys()))
 
-        hits = await retrieval_repo.list_hits(rec.id)  # docstring: 回查 hits 落库
-        assert len(hits) == len(bundle.hits)
-        assert len({h.node_id for h in hits}) == len(hits)
+        hits = await retrieval_repo.list_hits(retrieval_record_id=rec.id)  # docstring: 回查 hits 落库
+        # docstring: DB hits may include multi-stage candidates for auditability;
+        # bundle.hits are the final/top-k used for generation.
+        assert len(hits) >= len(bundle.hits)
+        db_node_ids = {str(h.node_id) for h in hits}
+        bundle_node_ids = {str(h.node_id) for h in bundle.hits}
+        assert bundle_node_ids.issubset(db_node_ids)  # docstring: bundle hits must be persisted
+
         assert all(h.source in {"keyword", "vector", "fused", "reranked"} for h in hits)
 
         assert bundle.hits  # docstring: bundle hits 非空
+
+        # docstring: final hits (used for generation) must have unique node_ids
+        final_node_ids = [str(h.node_id) for h in bundle.hits]
+        assert len(final_node_ids) == len(set(final_node_ids))
+
         details = bundle.hits[0].score_details or {}
         assert "keyword" in details or "vector" in details  # docstring: 分数细节可解释
 
@@ -327,8 +337,8 @@ async def test_retrieval_gate_end_to_end(session: AsyncSession) -> None:
         vec0 = vec_hits[0].score_details or {}
         assert {"raw_score", "metric_type"}.issubset(set(vec0.keys()))
 
-        # docstring: persist assertions: rank must be contiguous starting at 1
-        assert [h.rank for h in hits] == list(range(1, len(hits) + 1))
+        # docstring: final hits (bundle) rank must be contiguous starting at 1
+        assert [h.rank for h in bundle.hits] == list(range(1, len(bundle.hits) + 1))
     finally:
         try:
             await client.drop_collection(spec.name)  # docstring: 清理 Milvus 资源

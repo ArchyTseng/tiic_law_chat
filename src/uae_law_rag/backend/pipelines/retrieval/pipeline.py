@@ -236,7 +236,7 @@ async def run_retrieval_pipeline(
     # docstring: Make output_fields auditable & consistent with vector_recall defaulting.
     # NOTE: vector_mod._normalize_output_fields already defaults to DEFAULT_OUTPUT_FIELDS;
     # we normalize once here so provider_snapshot reflects the real fields used at runtime.
-    effective_output_fields: List[str] = vector_mod._normalize_output_fields(cfg.output_fields)  # type: ignore[attr-defined]
+    effective_output_fields: List[str] = vector_mod.normalize_output_fields(cfg.output_fields)  # type: ignore[attr-defined]
 
     ctx.timing.reset()  # docstring: 清理上次 timing
     errors: Dict[str, str] = {}
